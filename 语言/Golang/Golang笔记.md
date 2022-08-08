@@ -3,18 +3,23 @@ Golang基础
 ## 包的导入
 
 ```go
-import "fmt"	 // 导入一个包
+// 导入一个包
+import "fmt"
 
-import fmt "fmt"  //给包取别名
+//给包取别名
+import fmt "fmt"
 
+// 多个包的导入
 import (
 	"fmt"
     "os"
-)   // 多个包的导入
+)   
 
-import _ "fmt" //导入而不使用
+//导入而不使用
+import _ "fmt" 
 
-import . "fmt" //使用的时候可以直接使用其方法，而不需要 fmt.xxx
+//使用的时候可以直接使用其方法，而不需要 fmt.xxx
+import . "fmt" 
 ```
 
 ## 注释方式
@@ -29,7 +34,6 @@ import . "fmt" //使用的时候可以直接使用其方法，而不需要 fmt.x
 
 ## 关键字
 
-```javascript
 包管理（2个）：
 	import	package
 
@@ -39,7 +43,7 @@ import . "fmt" //使用的时候可以直接使用其方法，而不需要 fmt.x
 程序流程控制（15个）：
 	break	case	continue	default	defer	else	fallthrough	
 	for		go		goto		if		range	return	select		switch
-```
+
 
 ## 数据类型
 
@@ -215,6 +219,12 @@ Go 语言支持的位运算符如下表所示。假定 A 为60，B 为13：
 | ^=         | 按位异或后赋值                                 | C ^= 2 等于 C = C ^ 2                 |
 | \|=        | 按位或后赋值                                   | C \|= 2 等于 C = C \| 2               |
 
+
+## 数据类型
+
+
+
+
 ### 指针相关
 
 | **运算符** | **描述**         | **实例**                   |
@@ -225,7 +235,6 @@ Go 语言支持的位运算符如下表所示。假定 A 为60，B 为13：
 ## 条件语句与循环
 
 ### 	**条件语句**
-
 #### 		if else if
 
 #### 		switch	
