@@ -41,6 +41,9 @@ import . "fmt"
 	break	case	continue	default	defer	else	fallthrough	
 	for		go		goto		if		range	return	select		switch
 ```
+## 变量
+大写字母开头可被其他包使用，反之则是只能被本包使用。
+使用驼峰命名法
 
 ## 数据类型
 
@@ -53,7 +56,6 @@ Go 语言中数据类型分为：基本数据类型和复合数据类型基本�
 复合数据类型有：
 
 数组、切片、结构体、函数、map、通道（channel）、接口等。
-
 ### 整型
 
 整型的类型有很多中，包括 int8，int16，int32，int64。我们可以根据具体的情况来进行定义
@@ -238,7 +240,13 @@ func main() {
 
 	// 通过rune打印的是 utf-8字符
 	for index, v := range s {
-		fmt.Println(index, v)
+		fmt.Println(index, string(v))
+	}
+
+	// 将字符串转为unicode序列 
+	data := []rune(s)
+	for index, v := range data {
+		fmt.Println(index, string(v))
 	}
 }
 ```
@@ -273,7 +281,12 @@ Golang限定字符或者字符串一共三种引号，单引号（’’)，双�
  >双引号，才是字符串，实际上是字符数组。可以用索引号访问某字节，也可以用len()函数来获取字符串所占的字节长度。
  >
  >反引号，表示字符串字面量，但不支持任何转义序列。字面量 raw literal string 的意思是，你定义时写的啥样，它就啥样，你有换行，它就换行。你写转义字符，它也就展示转义字符。
-
+### 类型声明
+```go
+如果两个类型具有相同的底层类型，则两者可以互相转换
+// type name 底层类型
+type Int int
+```
 ### 类型转换
 
 #### 数值类型转换
@@ -540,7 +553,7 @@ for i := 0; i < len(slice); i++ {
 切片的容量是从它的第一个元素开始数，到其底层数组元素末尾的个数。切片s的长度和容量可通过表达式len（s）和cap（s）来获取。
 
 #### make切片
-切片扩容：当元素存放不下的时候，会将原来的容量扩大两倍
+切片扩容：当元素存放不下的时候，当容量小于1024的时候，会将原来的容量扩大两倍。大于1024，则会容量*1.25.
 ```go
 // T：切片的元素类型
 // size：切片中元素的数量
@@ -562,6 +575,13 @@ copy(slices5, slices4)
 // Go语言中并没有删除切片元素的专用方法，利用切片本身的特性来删除元素
 slices6 = append(slices6[:1], slices6[2:]...)
 
+
+
+// 判断一个切片是否为空，应该是len(slice1)==0
+var s []int // len(s)为0，s为nil
+s = nil    // len(s)为0，s为nil
+s = []int(nil) // len(s)为0，s为nil
+s=[]int{} // len(s)为0，s不为nil
 ```
 
 
@@ -645,10 +665,402 @@ func sunFn2(x ...int) int {
 sunFn2(1, 2, 3, 4, 5, 7)
 
 
-// 多值返回
+// 多值返回,返回的东西不需要声明，而可以直接赋值返回
 func sunFn4(x int, y int)(sum int, sub int) {
 	sum = x + y
 	sub = x -y
 	return
 }
 ```
+### 匿名函数
+函数当然还可以作为返回值，但是在Go语言中，函数内部不能再像之前那样定义函数了，只能定义匿名函数,匿名函数就是没有函数名的函数，匿名函数的定义格式如下
+
+```go
+func (参数)(返回值) {
+    函数体
+}
+
+fun return_fun() func(){
+	return func(){
+		...
+	}
+}
+
+func main() {
+	func () {
+		fmt.Println("匿名自执行函数")
+	}()
+
+	fun := return_fun() 
+	fun() //执行函数的内部的匿名函数
+
+}
+```
+### 闭包
+- 可以让一个变量常驻内存
+- 可以让一个变量不污染全局
+
+闭包可以理解成 “定义在一个函数内部的函数”。在本质上，闭包就是将函数内部 和 函数外部连接起来的桥梁。或者说是函数和其引用环境的组合体。
+
+- 闭包是指有权访问另一个函数作用域中的变量的函数
+- 创建闭包的常见的方式就是在一个函数内部创建另一个函数，通过另一个函数访问这个函数的局部变量
+
+注意：由于闭包里作用域返回的局部变量资源不会被立刻销毁，所以可能会占用更多的内存，过度使用闭包会导致性能下降，建议在非常有必要的时候才使用闭包。
+
+```go
+package main
+import "fmt"
+func adder() func() int {
+	var i = 10
+	return func() int {
+		return i + 1
+	}
+}
+
+func adder2() func(y int) int {
+	var i = 10
+	return func(y int) int {
+		i = i + y
+		return i
+	}
+}
+
+func main() {
+	// 闭包
+
+	// 不会污染全局变量
+	var fn = adder()
+	fmt.Println(fn())
+	fmt.Println(fn())
+	fmt.Println(fn())
+
+	// 更改了函数内的变量,会修改函数内的变量
+	// data的值更改
+	var fn2 = adder2()
+	data := 10
+	fmt.Println(fn2(data))
+	fmt.Println(fn2(data))
+	fmt.Println(fn2(data))
+}
+```
+### defer
+Go 语言中的defer 语句会将其后面跟随的语句进行延迟处理。在defer归属的函数即将返回时，将延迟处理的语句按defer定义的逆序进行执行，也就是说，先被defer的语句最后被执行，最后被defer的语句，最先被执行。
+
+并且多个defer是逆序执行，既是栈的顺序执行
+```go
+fmt.Println("1")
+defer fmt.Println("2")
+defer fmt.Println("3")
+fmt.Println("4")
+
+func main() {
+	fmt.Println("开始")
+	defer func() {
+		fmt.Println("1")
+		fmt.Println("2")
+	}()
+	fmt.Println("结束")
+}
+```
+#### 执行时机
+在Go语言的函数中return语句在底层并不是原子操作，它分为返回值赋值和RET指令两步。而defer语句执行的时机就在返回值赋值操作后，RET指令执行前。
+
+### 错误处理
+Go语言中是没有异常机制，但是使用panic / recover模式来处理错误
+
+- panic：可以在任何地方引发
+- recover：只有在defer调用函数内有效
+``` go
+func readFile(fileName string) error {
+	if fileName == "main.go" {
+		return nil
+	} else {
+		return errors.New("读取文件失败")
+	}
+}
+
+func myFn () {
+	defer func() {
+		e := recover()
+		if e != nil {
+			fmt.Println("给管理员发送邮件")
+		}
+	}()
+	err := readFile("XXX.go")
+	if err != nil {
+		panic(err)
+	}
+}
+
+func main() {
+	myFn()
+}
+```
+### 内置函数
+| 内置函数      | 介绍                                         |
+| ------------- | ------------------------------------------------------------ |
+| close         | 主要用来关闭channel                                          |
+| len           | 用来求长度，比如string、array、slice、map、channel           |
+| new           | 用来分配内存、主要用来分配值类型，比如 int、struct ，返回的是指针 |
+| make          | 用来分配内存，主要用来分配引用类型，比如chan、map、slice     |
+| append        | 用来追加元素到数组、slice中                                  |
+| panic\recover | 用来处理错误  
+
+## 日期函数
+时间和日期是我们编程中经常会用到的，在golang中time包提供了时间的显示和测量用的函数。
+```go
+
+timeObj := time.Now()
+year := timeObj.Year()
+month := timeObj.Month()
+day := timeObj.Day()
+fmt.Printf("%d-%02d-%02d \n", year, month, day)
+
+// 格式化
+fmt.Println(timeObj2.Format("2006-01-02 15:04:05"))
+// 获取时间戳
+timeObj3 := time.Now()
+// 获取毫秒时间戳
+unixTime := timeObj3.Unix()
+// 获取纳秒时间戳
+unixNaTime := timeObj3.UnixNano(
+
+// 日期字符串转换成时间戳
+var timeStr2 = "2020-07-21 08:10:05";
+var tmp = "2006-01-02 15:04:05"
+timeObj5, _ := time.ParseInLocation(tmp, timeStr2, time.Local)
+fmt.Println(timeObj5.Unix())
+
+// 时间间隔
+// 参考：https://www.zhangbj.com/p/652.html
+t := time.Now()
+time.Sleep(2e9) // 休眠2秒
+delta := time.Now().Sub(t)
+fmt.Println("时间差：", delta) 
+
+// 睡眠
+time.Sleep(time.Second)
+fmt.Println("一秒后")
+```
+## 指针
+要搞明白Go语言中的指针需要先知道三个概念
+
+- 指针地址
+- 指针类型
+- 指针取值
+
+Go语言中的指针操作非常简单，我们只需要记住两个符号：&：取地址，*：根据地址取值.
+不是所有的值都有地址，但是所有变量都有地址，
+```go
+func main() {
+
+	// 声明某个类型的指针，两种方式。
+	// p := *int
+	// p := new(int)
+	v := 1
+	fmt.Println(pointer(&v))
+}
+
+func pointer(p *int) *int {
+	*p++
+	return p
+}
+
+```
+### make和new
+可以通过new和make创建指针
+```go
+// 使用new关键字创建指针
+aPoint := new(int)
+fmt.Printf("%T \n", aPoint)
+fmt.Println(*aPoint)
+```
+
+
+- 两者都是用来做内存分配的
+- make只能用于slice、map以及channel的初始化，返回的还是这三个引用类型的本身
+- 而new用于类型的内存分配，并且内存赌赢的值为类型的零值，返回的是指向类型的指针
+
+## struct 
+Golang中没有“类”的概念，Golang中的结构体和其他语言中的类有点相似。和其他面向对象语言中的类相比，Golang中的结构体具有更高的扩展性和灵活性。
+
+Golang中的基础数据类型可以装示一些事物的基本属性，但是当我们想表达一个事物的全部或部分属性时，这时候再用单一的基本数据类型就无法满足需求了，Golang提供了一种自定义数据类型，可以封装多个基本数据类型，这种数据类型叫结构体，英文名称struct。也就是我们可以通过struct来定义自己的类型了。
+```go
+type Person struct {
+	name string
+	age int
+	sex string
+}
+func main() {
+	// 实例化结构体
+	var person Person
+	person.name = "张三"
+	person.age = 20
+	person.sex = "男"
+	fmt.Printf("%#v", person)
+
+	// 
+	var person2 = new(Person)
+	person2.name = "李四"
+	person2.age = 30
+	person2.sex = "女"
+	fmt.Printf("%#v", person2)
+
+	// 
+	var person4 = Person{
+    name: "张三",
+    age: 10,
+    sex: "女",
+	}
+	fmt.Printf("%#v", person4)
+}
+```
+> 注意：结构体首字母可以大写也可以小写，大写表示这个结构体是公有的，在其它的包里面也可以使用，小写表示结构体属于私有的，在其它地方不能使用
+struct是可以直接比较的
+
+### 匿名字段与继承
+结构体允许其成员字段在声明时没有字段名而只有类型，这种没有名字的字段就被称为匿名字段
+
+匿名字段默认采用类型名作为字段名，结构体要求字段名称必须唯一，因此一个结构体中同种类型的匿名字段**只能一个**
+
+结构体的字段类型可以是：基本数据类型，也可以是切片、Map 以及结构体
+
+如果结构体的字段类似是：指针、slice、和 map 的零值都是nil，即还没有分配空间
+
+如果需要使用这样的字段，需要先make，才能使用。
+
+当使用嵌套的结构体时候，如A中使用到B，可以将B声明为匿名字段，就可以直接A.xxx,这个xxx可以是A和B的成员变量。
+
+将一个变量声明为匿名字段就可以认为是继承了该结构体。
+```go
+// 嵌套，声明匿名变量，
+type Mouse struct{
+	Material string
+	Color string
+}
+
+type Pc struct{
+	Mouse
+	Price float32
+}
+func main() {
+
+	pc := Pc{}
+	pc.Price = 250
+	pc.Color = "Red"
+	pc.Material = "塑料"
+	fmt.Println(pc)
+}
+```
+
+
+### 方法
+在go语言中，没有类的概念但是可以给类型（结构体，自定义类型）定义方法。所谓方法就是定义了接收者的函数。接收者的概念就类似于其他语言中的this 或者self。
+
+方法的定义格式如下：
+
+```go
+func (接收者变量 接收者类型) 方法名(参数列表)(返回参数) {
+    函数体
+}
+
+type Person struct {
+	name string
+	age int
+	sex string
+}
+
+// 定义一个结构体方法
+func (p Person) PrintInfo() {
+	fmt.Print(" 姓名: ", p.name)
+	fmt.Print(" 年龄: ", p.age)
+	fmt.Print(" 性别: ", p.sex)
+	fmt.Println()
+}
+func (p *Person) SetInfo(name string, age int, sex string)  {
+	p.name = name
+	p.age = age
+	p.sex = sex
+}
+
+func main() {
+	var person = Person{
+		"张三",
+		18,
+		"女",
+	}
+	person.PrintInfo()
+	person.SetInfo("李四", 18, "男")
+	person.PrintInfo()
+}
+```
+### 结构体与json
+Golang中的序列化和反序列化主要通过“encoding/json”包中的 json.Marshal() 和 json.Unmarshal()
+
+#### 标签
+Tag是结构体的元信息，可以在运行的时候通过反射的机制读取出来。Tag在结构体字段的后方定义，由一对反引号包裹起来，具体的格式如下：
+
+```json
+key1："value1" key2："value2"
+```
+
+结构体tag由一个或多个键值对组成。键与值使用冒号分隔，值用双引号括起来。同一个结构体字段可以设置多个键值对tag，不同的键值对之间使用空格分隔。
+
+注意事项：为结构体编写Tag时，必须严格遵守键值对的规则。结构体标签的解析代码的容错能力很差，一旦格式写错，编译和运行时都不会提示任何错误，通过反射也无法正确取值。例如不要在key和value之间添加空格。
+```go
+// 定义一个学生结构体，注意结构体的首字母必须大写，代表公有，否则将无法转换
+type Student struct {
+	Id string `json:"id"` // 通过指定tag实现json序列化该字段的key
+	Gender string `json:"gender"`
+	Name string `json:"name"`
+	Sno string `json:"sno"`
+}
+func main() {
+	var s1 = Student{
+		ID: "12",
+		Gender: "男",
+		Name: "李四",
+		Sno: "s001",
+	}
+	// 结构体转换成Json（返回的是byte类型的切片）
+	jsonByte, _ := json.Marshal(s1)
+	jsonStr := string(jsonByte)
+	fmt.Printf(jsonStr)
+
+	var s2 = Student{}
+	// 第一个是需要传入byte类型的数据，第二参数需要传入转换的地址
+	err := json.Unmarshal([]byte(jsonStr), &s2)
+	if err != nil {
+		fmt.Printf("转换失败 \n")
+	} else {
+		fmt.Printf("%#v \n", s2)
+	}
+
+
+	// 通过tag去与结构体的数据进行绑定
+	var str = `{"id":"12","gender":"男","name":"李四","sno":"s001"}`
+	var s3 = Student{}
+	// 第一个是需要传入byte类型的数据，第二参数需要传入转换的地址
+	err = json.Unmarshal([]byte(str), &s3)
+	if err != nil {
+		fmt.Printf("转换失败 \n")
+	} else {
+		fmt.Printf("%#v \n", s2)
+	} 
+}
+```
+## 包
+包（package）是多个Go源码的集合，是一种高级的代码复用方案，Go语言为我们提供了很多内置包，如fmt、strconv、strings、sort、errors、time、encoding/json、os、io等。
+
+Golang中的包可以分为三种：1、系统内置包   2、自定义包   3、第三方包
+### go mod
+在Golang1.11版本之前如果我们要自定义包的话必须把项目放在GOPATH目录。Go1.11版本之后无需手动配置环境变量，使用go mod 管理项目，也不需要非得把项目放到GOPATH指定目录下，你可以在你磁盘的任何位置新建一个项目，Go1.13以后可以彻底不要GOPATH了。
+
+常用指令
+- go download：下载依赖的module到本地cache
+- go edit：编辑go.mod文件
+- go graph：打印模块依赖图
+- go init：在当前文件夹下初始化一个新的module，创建go.mod文件
+- tidy：增加丢失的module，去掉未使用的module
+- vendor：将依赖复制到vendor下
+- verify：校验依赖，检查下载的第三方库有没有本地修改，如果有修改，则会返回非0，否则校验成功
