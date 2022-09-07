@@ -957,6 +957,7 @@ func main() {
 ### 方法
 在go语言中，没有类的概念但是可以给类型（结构体，自定义类型）定义方法。所谓方法就是定义了接收者的函数。接收者的概念就类似于其他语言中的this 或者self。
 
+
 方法的定义格式如下：
 
 ```go
@@ -971,12 +972,14 @@ type Person struct {
 }
 
 // 定义一个结构体方法
-func (p Person) PrintInfo() {
-	fmt.Print(" 姓名: ", p.name)
-	fmt.Print(" 年龄: ", p.age)
-	fmt.Print(" 性别: ", p.sex)
+func (self Person) PrintInfo() {
+	fmt.Print(" 姓名: ", self.name)
+	fmt.Print(" 年龄: ", self.age)
+	fmt.Print(" 性别: ", self.sex)
 	fmt.Println()
 }
+
+// 传入指针的话，在方法里面修改了值，会修改对应的结构体对象的值。可以直接使用p.SetInfo,实际应该是&p.SetInfo,编译器会隐式转换
 func (p *Person) SetInfo(name string, age int, sex string)  {
 	p.name = name
 	p.age = age
@@ -989,9 +992,14 @@ func main() {
 		18,
 		"女",
 	}
-	person.PrintInfo()
+	person.PrintInfo()	
 	person.SetInfo("李四", 18, "男")
 	person.PrintInfo()
+
+	// 也可以将方法赋值给变量，然后插入的第一个参数是结构体，后面跟参数
+	printinfo := Person.SetInfo
+	printinfo(person,"李四", 18, "男")
+
 }
 ```
 ### 结构体与json
