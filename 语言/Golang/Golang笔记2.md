@@ -1057,6 +1057,79 @@ func main() {
 	} 
 }
 ```
+## 接口
+Golang中的接口是一种抽象数据类型，Golang中接口定义了对象的行为规范，只定义规范不实现。接口中定义的规范由具体的对象来实现。
+
+在Golang中接口（interface）是一种类型，一种抽象的类型。接口（interface）是一组函数method的集合，Golang中的接口不能包含任何变量。接口也可以像struct那样组合嵌套使用。
+
+接口值都为nil或者二者的动态类型完全一致，且二者的动态类型的值可以比较，那么两个接口值相等。但是接口值不可比较例如是map/slice，那么比较两个接口会崩溃。
+
+```go
+/*
+形式如下
+type 接口名 interface {
+    方法名1 (参数列表1) 返回值列表1
+    方法名2 (参数列表2) 返回值列表2
+}  
+*/
+type Animal interface {
+	Run() string
+	Eat() string
+}
+
+
+
+type Dog struct {
+	Name  string
+	Speed int
+	Food  string
+}
+type Cat struct {
+	Name  string
+	Speed int
+	Food  string
+}
+
+func (self *Dog) Run() string {
+	return fmt.Sprintf("dog:%v is running and its speed is %v", self.Name, self.Speed)
+}
+func (self *Dog) Eat() string {
+	return fmt.Sprintf("dog:%v is eating %v", self.Name, self.Food)
+}
+
+func (self *Cat) Run() string {
+	return fmt.Sprintf("Cat:%v is running and its speed is %v", self.Name, self.Speed)
+}
+func (self *Cat) Eat() string {
+	return fmt.Sprintf("Cat:%v is eating %v", self.Name, self.Food)
+}
+
+func Run(animal Animal) string {
+	return animal.Run()
+}
+func Eat(animal Animal) string {
+	return animal.Eat()
+}
+
+func main() {
+	cat := Cat{Name: "tom", Speed: 5, Food: "fish"}
+	dog := Dog{Name: "cheems", Speed: 20, Food: "bone"}
+	fmt.Println(Run(&cat))
+	fmt.Println(Run(&dog))
+	fmt.Println(Eat(&cat))
+	fmt.Println(Eat(&dog))
+
+}
+```
+### 类型断言
+一般用于函数or方法中传入动态类型，其实在go1.18中引入了范型。
+```go
+//相当于python中的isinstance
+//如果x是type类型，那么ok为true
+f,ok = x.(type)
+```
+
+
 ## 包
 包（package）是多个Go源码的集合，是一种高级的代码复用方案，Go语言为我们提供了很多内置包，如fmt、strconv、strings、sort、errors、time、encoding/json、os、io等。
 
