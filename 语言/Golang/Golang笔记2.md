@@ -1128,8 +1128,276 @@ func main() {
 //如果x是type类型，那么ok为true
 f,ok = x.(type)
 ```
+## 并发
+### goroutine
+可以理解为用户级线程，这是对内核透明的，也就是系统并不知道有协程的存在，是完全由用户自己的程序进行调度的。Golang的一大特色就是从语言层面原生持协程，在函数或者方法前面加go关键字就可创建一个协程。可以说Golang中的协程就是goroutine。
+```go
+// 执行一个函数
+go funA()
+// 执行一个匿名函数
+go func(){ ... }()
+```
+### 通道
+管道是Golang在语言级别上提供的goroutine间的通讯方式，我们可以使用channel在多个goroutine之间传递消息。如果说goroutine是Go程序并发的执行体，channel就是它们之间的连接。channel是可以让一个goroutine发送特定值到另一个goroutine的通信机制。
+
+Golang的并发模型是CSP（Communicating Sequential Processes），提倡通过通信共享内存而不是通过共享内存而实现通信。
+
+Go语言中的管道（channel）是一种特殊的类型。管道像一个传送带或者队列，总是遵循先入先出（First In First Out）的规则，保证收发数据的顺序。每一个管道都是一个具体类型的导管，也就是声明channel的时候需要为其指定元素类型.
+
+关闭channel后，无法向channel 再发送数据(引发 panic 错误后导致接收立即返回零值)；关闭channel后，可以继续从channel接收数据；
+```go
+// 定义 
+// ch :=make(chan type)
+ch :=make(chan int)
+
+// 发送，接收和关闭(关闭一个通道不是必须的，通道会被垃圾回收)的三个功能
+ch <- 1
+num := <- ch
+close(ch)
+
+// 遍历通道
+for x:=range ch{
+	fmt.Println("get data from channel value is",x)
+}
+```
+#### 无缓冲通道
+无缓冲通道发送操作将会阻塞，直到另一个goroutine执行了接受操作。使用无缓冲通道发送和接受会同步化。
+```go
+func main() {
+	num := make(chan int)
+	res := make(chan int)
+	go func() {
+		for i := 0; i < 10; i++ {
+			num <- i
+		}
+		close(num)
+	}()
+	go func() {
+		for {
+			if i, ok := <-num; ok {
+				res <- i*i
+			} else {
+				break
+			}
+		}
+		close(res)
+	}()
+		
+	for x:=range res{
+		fmt.Println("get data from channel value is",x)
+	}
+}
+```
+#### 单向通道
+一个通道可以被限制为只能输入数据(输入通道)或者是只能输出数据(输出通道)。普通的通道可以转换为单向通道，但是反过来不行。
+```go
+
+var ch = make(chan int, 2)
+ch <- 10
+<- ch
+
+// 管道声明为只写管道，只能够写入，不能读
+var ch2 = make(chan<- int, 2)
+ch2 <- 10
+
+// 声明一个只读管道
+var ch3 = make(<-chan int, 2)
+<- ch3
 
 
+// 一个例子
+
+func insert_num(in chan<- int) {
+	for i := 0; i < 10; i++ {
+		in <- i
+	}
+	close(in)
+}
+func cal(input <-chan int, output chan<- int) {
+	for x := range input {
+		output <- x * x
+	}
+	// 可以关闭写入通道，但是不能关闭读取通道
+	// 单向通道需要适当的关闭
+	close(output)
+}
+
+func main() {
+	num := make(chan int)
+	res := make(chan int)
+	go insert_num(num)
+	go cal(num, res)
+	for x := range res {
+		fmt.Println("get data from channel value is", x)
+	}
+}
+```
+#### 缓存通道
+缓冲通道是一个元素队列，创建时指定队列的最大长度。
+使用缓冲通道，当队列没有满的时候，插入值是无阻塞的，当队列满了，则需要等待数据被取出。
+```go
+ch :=make(chan int,size)
+// 获取通道的容量
+cap(ch)
+// 获取通道的len
+len(ch)
+```
+#### select
+同时需要用多个通道，从其中选择一个通道来用。当需要接受多个goroutine的信息的时候，当多个case同时到达，将会允许一个伪随机散算法选择case。
+```go
+func main() {
+	ch1 := make(chan int, 10)
+	ch1 <- 10
+	ch1 <- 12
+	ch1 <- 13
+	ch2 := make(chan int, 10)
+	ch2 <- 20
+	ch2 <- 23
+	ch2 <- 24
+
+// 每次循环的时候，会随机中一个chan中读取，其中for是死循环
+	for {
+		select {
+			case v:= <- ch1:
+			fmt.Println("从initChan中读取数据：", v)
+			case v:= <- ch2:
+			fmt.Println("从stringChan中读取数据：", v)
+			default:
+			fmt.Println("所有的数据获取完毕")
+			return
+		}
+	}
+}
+```
+#### 选择
+无缓冲通道和缓冲通道的选择，取决于生产和消费的速度。如果生产快，选择缓冲通道可以让消费也快。如果是消费快，缓冲通道就没意义。
+#### 并行循环
+for里面启动goroutine，让每个goroutine去跑执行每一次的循环。但需要考虑数据竞争的问题。
+##### 例1，便利数据然后求和返回
+goroutine需要结束后在执行，所以加上waitgroup。
+因为可能产生数据竞争，所以加锁，保证数据安全。
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+func sum(index int, num *[]int, total *int) {
+	*total += (*num)[index]
+}
+
+func main() {
+	num := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+	total := 0
+	var mu sync.Mutex
+
+	// 使用waitgroup，保证每个goroutine结束之后，在进行主线程
+	var wg sync.WaitGroup
+	for index, _ := range num {
+		// 每次执行一个+1
+		wg.Add(1)
+		go func(index int, num *[]int, total *int) {
+			mu.Lock()
+			sum(index, num, total)
+			mu.Unlock()
+			wg.Done()
+			// 完成然后done
+		}(index, &num, &total)
+	}
+	time.Sleep(1000 * time.Microsecond)
+
+	fmt.Println(total)
+}
+```
+##### 例2,并行修改数组数据
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+func update(index int, num *[]string) {
+	(*num)[index] = (*num)[index] + " 11"
+}
+
+func main() {
+	num := []string{"a", "b", "c"}
+	var wg sync.WaitGroup
+	for index, _ := range num {
+		wg.Add(1)
+		go func(index int, num *[]string) {
+			update(index, num)
+			wg.Done()
+		}(index, &num)
+	}
+	time.Sleep(1000 * time.Microsecond)
+
+	for _, value := range num {
+		fmt.Println(value)
+	}
+}
+``` 
+## 共享内存
+golang中建议使用channel来完成通信，而不是共享内存。
+### 互斥锁
+```go
+var mu sync.Mutex
+mu.Lock()
+mu.Unlock()
+```
+### 读写锁
+```go
+var mu sync.RWMutex
+// 读锁
+mu.RLock()
+mu.RUnlock()
+// 写锁
+mu.Lock()
+mu.Unlock()
+```
+### 比较与选择
+读写锁在竞争不激烈的时候才有优势。
+在golang中写并发，尽量把变量限制到单个goroutine，对于其他变量，使用互斥锁。
+### sync.once
+当某些数据只需要一次初始化的时候，就可以用它。例如加载一些初始化变量。
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+var once sync.Once
+
+func InitData()  {
+	once.Do(func() {
+		fmt.Println("init data just once")
+	})
+}
+
+
+func main() {
+	var wg sync.WaitGroup
+	for I := 0; I < 10000; I++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			InitData()
+		}()
+	}
+}
+
+```
+### 静态检测器
+如果有数据安全的问题，就会有warning。
+```shell
+go run/build -race xxx.go
+```
 ## 包
 包（package）是多个Go源码的集合，是一种高级的代码复用方案，Go语言为我们提供了很多内置包，如fmt、strconv、strings、sort、errors、time、encoding/json、os、io等。
 
