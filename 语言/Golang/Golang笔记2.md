@@ -1393,7 +1393,7 @@ func main() {
 }
 
 ```
-### 静态检测器
+### 竞态检测器
 如果有数据安全的问题，就会有warning。
 ```shell
 go run/build -race xxx.go
