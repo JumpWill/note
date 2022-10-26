@@ -1009,7 +1009,7 @@ spec: # 详情描述
 
 CronJob控制器以 Job控制器资源为其管控对象，并借助它管理pod资源对象，Job控制器定义的作业任务在其控制器资源创建之后便会立即执行，但CronJob可以以类似于Linux操作系统的周期性任务作业计划的方式控制其运行**时间点**及**重复运行**的方式。也就是说，**CronJob可以在特定的时间点(反复的)去运行job任务**。
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\cronjob.jpg)
+![]( ../k8s/images/cronjob.jpg)
 
 #### 配置文件
 
