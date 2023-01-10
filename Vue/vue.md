@@ -30,7 +30,7 @@ Vue使用CDN
         },   
         })
         v.$mount("#root")
-    	//通过这种方法绑定对象
+     //通过这种方法绑定对象
 </script>
 ```
 
@@ -38,18 +38,18 @@ Vue使用CDN
 
 #### 插值语法
 
-​		将vue的data插入到网页的显示内容中{{ name }}。
+​  将vue的data插入到网页的显示内容中{{ name }}。
 
 #### 指令语法
 
-​		将vue中的数据放到标签。
+​  将vue中的数据放到标签。
 
-​		v-bind是单向绑定，即vue对象中data改变了页面中对应的值会改变，但是页面中值改变不会影响data的值。
+​  v-bind是单向绑定，即vue对象中data改变了页面中对应的值会改变，但是页面中值改变不会影响data的值。
 
-​		v-model是双向绑定，即是某一方改变之后对应的数据不会变。v-model只能用于输入类的参数。
+​  v-model是双向绑定，即是某一方改变之后对应的数据不会变。v-model只能用于输入类的参数。
 
 ```html
-	// 插值语法
+ // 插值语法
 <div id="root">加油，{{name}}<br>
     //指令语法 v-bind:href 也可以简写为:href
     <a v-bind:href="url">linkto</a>
@@ -99,11 +99,11 @@ viewmodel：vue中的实例对象。
     Object.defineProperty(v, "age", {
     /*
     指定三个参数，对象，属性名，属性值相关配置
-	value 直接指定值,enumerable 可遍历的默认为false
-	writable 是否可改变 默认为false  不能与get同用
-	configurable 是否可删除 默认为false
-	get()     set(value) 方法 其中value是获取到的变化的值。
-    get:funtion(){} 简写为get()	
+ value 直接指定值,enumerable 可遍历的默认为false
+ writable 是否可改变 默认为false  不能与get同用
+ configurable 是否可删除 默认为false
+ get()     set(value) 方法 其中value是获取到的变化的值。
+    get:funtion(){} 简写为get() 
     */
 
         // value: 22,
@@ -112,20 +112,18 @@ viewmodel：vue中的实例对象。
         // configurable:true,
         get:function () {
         //get(){  return xxx}
-			//值与变量绑定
+   //值与变量绑定
             return  age
         },
         set(value){
             console.log(value)
             console.log("modify value")
-			//将变化的值在赋值给变量
+   //将变化的值在赋值给变量
             age = value
         }
     })
     console.log(person)
 ```
-
-
 
 #### 数据代理
 
@@ -261,14 +259,14 @@ show:{{ info}}
       name: "Will",
       sex: "https://www.baidu.com"
       }
-  	},
+   },
   computed:{
       info:{
           get(){
           return this.name+this.sex
         }
       }
-  	}
+   }
   })
   v.$mount("#root")
 
@@ -276,9 +274,9 @@ show:{{ info}}
 //简写
   computed:{
       info(){
-		return this,name+this.sex
-			}
-  	}
+  return this,name+this.sex
+   }
+   }
 ```
 
 ### 侦听属性
@@ -305,7 +303,7 @@ vue中的数据(包括普通data和计算属性)发生了变化，想要完成�
 //直接在vue对象中配置watch,监视属性的变化
         watch:{
             name:{
-				deep:true,
+    deep:true,
                 handler(newValue,oldValue){
                     console.log(newValue)
                     console.log(oldValue)
@@ -319,7 +317,7 @@ vue中的数据(包括普通data和计算属性)发生了变化，想要完成�
     v.$watch("sex", {handler(newValue, oldValue){
         console.log(newValue)
         console.log(oldValue)
-		//逻辑
+  //逻辑
     }})
 ```
 
@@ -344,8 +342,8 @@ vue中的数据(包括普通data和计算属性)发生了变化，想要完成�
                 return this.name + this.sex
             }
         },
-        watch:{	
-			//简写
+        watch:{ 
+   //简写
             name(newValue,oldValue){
                     console.log(newValue)
                     console.log(oldValue)
@@ -353,7 +351,7 @@ vue中的数据(包括普通data和计算属性)发生了变化，想要完成�
         },
     })
     v.$mount("#root")
-	
+ 
 //简写，后面传入个函数就行。
    v.$watch("sex", function (newValue, oldValue){
         console.log(newValue)
@@ -374,8 +372,6 @@ vue中的数据(包括普通data和计算属性)发生了变化，想要完成�
 
 注意：有些函数式不被vue对象管理的，例如上面的setTiemeout以及ajax等。
 
-
-
 ### 样式绑定
 
 有的时候需要在事件操作之后完成对网页样式的修改，此时就需要绑定样式。
@@ -391,14 +387,14 @@ new Vue({
             return {
                 name: "Will",
                 sex: "https://www.baidu.com",
-    			//样式为普通的字符
+       //样式为普通的字符
                 style:"root",
-    			//样式为字典
-    			classObj:{
-    			//div 和 root均为class属性
-    			div:true
-    			root:false
-   			 },
+       //样式为字典
+       classObj:{
+       //div 和 root均为class属性
+       div:true
+       root:false
+       },
             }
         },
         methods: {
@@ -429,7 +425,7 @@ v-if= 表达式  则是对应的元素都没有。v-else(-if)类似。
 
 **建议key不要用index，因为在新增数据破坏了原有数据结构顺序，新数据可能会出错。**
 
-阅读：https://blog.csdn.net/AiHuanhuan110/article/details/98223011
+阅读：<https://blog.csdn.net/AiHuanhuan110/article/details/98223011>
 
 ```html
 // 遍历数组
@@ -448,9 +444,5 @@ v-if= 表达式  则是对应的元素都没有。v-else(-if)类似。
 ```
 
  docker run -it -d --name 容器名-p 80:80 images
-
-
-
-
 
  COPY ./ ./   #将同属于dockerfile文件夹下的所有东西复制到工作目录

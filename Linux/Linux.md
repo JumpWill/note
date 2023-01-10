@@ -61,13 +61,13 @@
 |    date    |      查看时间      |
 | nptdate ip | 设置同步时间服务器 |
 
-详见:https://www.runoob.com/linux/linux-comm-date.html
+详见:<https://www.runoob.com/linux/linux-comm-date.html>
 
 ## 用户体系
 
  Linux中的用户体系，涉及用户名称，用户所在的组(一个用户有一个主组，也可以有很多副组)，当一般用户要使用root的某些权限的时候，可以使用sudo，需要对这个具体要求详细见
 
-https://www.cnblogs.com/yanling-coder/p/10947157.html
+<https://www.cnblogs.com/yanling-coder/p/10947157.html>
 
 ### 用户与组
 
@@ -127,7 +127,7 @@ r读   w允许在文件夹修改删除增加等操作  x可以进入该文件夹
 |        tar -zxvf 压缩包 -C dir        |       解压到dir下       |
 | tar -zcvf 压缩包名称 file1 file 2 ... | 将file1，file2打包压缩。 |
 
-tar详解:https://www.runoob.com/linux/linux-comm-tar.html
+tar详解:<https://www.runoob.com/linux/linux-comm-tar.html>
 
 ## 磁盘管理
 
@@ -173,7 +173,7 @@ du [-ahskm] 文件或目录名称
 |   lsblk -f   | 查看文件挂载情况 |
 | mount/umount |    挂载/卸载    |
 
-硬盘分类:https://www.cnblogs.com/LinuxSuDa/p/4513996.html
+硬盘分类:<https://www.cnblogs.com/LinuxSuDa/p/4513996.html>
 
 ## 进程管理
 
@@ -193,7 +193,7 @@ M 将内存从大到小排序
 
 P按CPU占用从大到小排序，
 
-https://www.jianshu.com/p/8a6754f919c5
+<https://www.jianshu.com/p/8a6754f919c5>
 
 ## 网络
 
@@ -465,10 +465,10 @@ ls && echo true || echo false
 ```shell
 if [ condition ]
 then
-	command1
+ command1
 elif [ condition ]
 then 
-	command2
+ command2
 else
     command3
 fi
@@ -517,11 +517,11 @@ esac
 sex=male
 case $sex in
 male)
-	echo 'male'
-	;;
+ echo 'male'
+ ;;
 female)
-	echo 'female'
-	;;
+ echo 'female'
+ ;;
 *)
     echo 'unknown'
     ;;
@@ -537,7 +537,7 @@ esac
 ```
 for((i=0;i<=100;i++))
 do
-	xxx
+ xxx
 done
 
 # 如
@@ -551,7 +551,7 @@ echo $sum
 
 报错Syntax error: Bad for loop variable，解决
 
-https://blog.csdn.net/liuqinglong_along/article/details/52191382
+<https://blog.csdn.net/liuqinglong_along/article/details/52191382>
 
 ###### 列表
 
@@ -575,7 +575,7 @@ PS: {start..end..step}可以快捷获取列表，如{1,100}表示1到100所有�
 ```
 while [ condition]
 do
-	xxx
+ xxx
 done
 
 # 如
@@ -583,8 +583,8 @@ sum=0
 i=0
 while [ $i -le 100 ]
 do
-	sum=$[ $sum + $i ]
-	i=$[ $i + 1 ]
+ sum=$[ $sum + $i ]
+ i=$[ $i + 1 ]
 done
 echo $sum
 ```
@@ -594,7 +594,7 @@ echo $sum
 ````shell
 until [ condition]
 do
-	xxx
+ xxx
 done
 
 # 如
@@ -602,8 +602,8 @@ sum=0
 i=0
 until [ $i -ge 100 ]
 do
-	sum=$[ $sum + $i ]
-	i=$[ $i + 1 ]
+ sum=$[ $sum + $i ]
+ i=$[ $i + 1 ]
 done
 echo $sum
 ````
@@ -618,7 +618,9 @@ echo $variable
 ```
 
 ### 函数
+
 基本形式
+
 ```shell
 # 形式1
 function function_name {
@@ -640,12 +642,17 @@ function sum()
  sum $1 $2s
 # 参数则使用$1,$2... 
 ```
+
 #### 系统函数
+
 即是系统的命令
+
 ```shell
 # 略
 ```
+
 #### 自定义函数
+
 ```shell
 #!/bin/bash 
 function sum()
@@ -656,15 +663,21 @@ function sum()
  }
  sum $1 $2s
 ```
+
 ### cut和三剑客
+
 三剑客
 grep 过滤   sed 修改替换文件内容，取行数据   aws 取列数据
+
 #### cut
+
 cut 的工作就是“剪”，具体的说就是在文件中负责剪切数据用的。cut 命令从文件的每 一行剪切字节、字符和字段并将这些字节、字符和字段输出。
+
 ```shell
 # 基本
 cut args filename
 ```
+
 参数
 | 字符 |           释义           |
 | :--: | :-----------------------: |
@@ -673,6 +686,7 @@ cut args filename
 | -d |     自定义分隔符，默认为制表符。    |
 | -f |  与-d一起使用，指定提取第几列。  |
 | -n |   取消分割多字节字符。仅和 -b 标志一起使用。如果字符的最后一个字节落在由 -b 标志的 List 参数指示的范围之内，该字符将被写出；否则，该字符将被排除  |
+
 ```shell
 # 如举个例子
 # test.txt文件内容如下
@@ -690,8 +704,11 @@ guan
 wolai
 le
 ```
+
 ps:在处理多空格时，如果文件里面的某些域是由若干个空格来间隔的，那么用cut就有点麻烦了，因为cut只擅长处理“以一个字符间隔”的文本内容
+
 #### grep
+
 过滤文本内容
 参数
 | 字符 |           释义           |
@@ -706,12 +723,17 @@ ps:在处理多空格时，如果文件里面的某些域是由若干个空格�
 | -w |    精确匹配，仅仅匹配目标    |
 | -m n |    仅仅匹配前n个    |
 | -v |    取出不包含目标字符的行   |
+
 ```shell
 cat  xxx | grep -wciv str
 ```
-参考：https://www.w3schools.cn/linux/linux_comm_grep.asp
+
+参考：<https://www.w3schools.cn/linux/linux_comm_grep.asp>
+
 #### awk
+
 一个强大的文本分析工具，把文件逐行的读入，以空格为默认分隔符将每行切片，切开 的部分再进行分析处理。
+
 ```shell
 # 基本形式
 awk args /pattern/do something
@@ -720,12 +742,12 @@ awk args /pattern/do something
 /101/./105/   范围在101到105,
 NR>=1 && NR<=5    第一行到第五行
 ```
+
 参数
 | 字符 |           释义           |
 | :--: | :-----------------------: |
 | -F ':' |    以字符为单位进行分割。    |
 | -i   |    传入自定义变量    |
-
 
 BEGIN {operation}操作文件前需要执行的操作
 END {operation} 完成文件操作后需要执行的操作
@@ -741,8 +763,11 @@ awk内置变量
 # 将test文本以冒号分割，读取文件前输出begin，打印分割出来以root开头的行的第二个 第三个，并且读取完成后输入 end。
  awk -F ':' 'BEGIN{print "BEGIN" }   /^root/{print  "第二个"  $2 "  第三个 " $3 "分割的当前行为" NR "当前行被分" NF }  END{print "END"} ' test 
 ```
-更多：https://www.cnblogs.com/fawaikuangtu123/p/10008645.html
+
+更多：<https://www.cnblogs.com/fawaikuangtu123/p/10008645.html>
+
 #### sed
+
 对文本的增删查改
 参数(x代表下面的操作)
 | 字符 |           释义           |
@@ -760,6 +785,7 @@ awk内置变量
 | i |   插入。i的后面可以接字符串，而这些字符串会在新的一行出现（当前行的上一行）    |
 | p |   打印。亦即将某个选择的数据打印出来。通常p会与参数sed -n一起运行    |
 | s |   取代。可以直接进行取代的工作。通常这个s的动作可以搭配正规表示法。例如1,20s/old/new/g |
+
 ```shell
 ps:在操作前加!就是不进行某操作，如 '4!d' 不删除第4行
 
