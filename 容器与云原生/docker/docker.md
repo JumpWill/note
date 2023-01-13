@@ -77,6 +77,8 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 # 6、运行服务
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
+# cmd执行多命令
+# CMD /bin/bash -c  "command1 && command2"
 
 
 #举例多个run
