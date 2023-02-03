@@ -1,3 +1,5 @@
+#
+
 ## 基本命令
 
 ### 数据库
@@ -15,9 +17,9 @@
 
 PS:
 
-​	表格中的db代表你的数据库名字。
+​ 表格中的db代表你的数据库名字。
 
-​	**要想支持表情存储需要使用  utf8mb4**  
+​ **要想支持表情存储需要使用  utf8mb4**  
 
 ### 表
 
@@ -40,7 +42,7 @@ PS:
 
 PS:
 
-​	 关键字INT是INTEGER的同义词，关键字DEC是DECIMAL的同义词。 
+​  关键字INT是INTEGER的同义词，关键字DEC是DECIMAL的同义词。
 
 ###### 时间
 
@@ -69,7 +71,7 @@ PS:
 
 PS：
 
-​	 char(n) 和 varchar(n) 中括号中 n 代表字符的个数，并不代表字节个数，比如 CHAR(30) 就可以存储 30 个字符。 
+​  char(n) 和 varchar(n) 中括号中 n 代表字符的个数，并不代表字节个数，比如 CHAR(30) 就可以存储 30 个字符。
 
 ##### 字段约束
 
@@ -226,7 +228,7 @@ insert into table values (列值1,列值2...),(列值1,列值2;..);
 
 PS:
 
-​	插入的数据的类型为字符创或者日期的时候，需要加引号，且数据大小应该遵守表的设计的限制。
+​ 插入的数据的类型为字符创或者日期的时候，需要加引号，且数据大小应该遵守表的设计的限制。
 
 ##### 删
 
@@ -319,7 +321,7 @@ select gender,COUNT(*) from student group by gender having COUNT(*)>10;
 
 PS:
 
-​	①null不参加聚合查询。
+​ ①null不参加聚合查询。
 
 ​    ②执行顺序是：where 聚合函数 having。
 
@@ -373,13 +375,13 @@ select stu.name name,c.name cname
 from stu left join class c on stu.class_id =c.id
 ```
 
- ![img](https://www.runoob.com/wp-content/uploads/2014/03/img_leftjoin.gif) 
+ ![img](https://www.runoob.com/wp-content/uploads/2014/03/img_leftjoin.gif)
 
 ###### 右连接( **RIGHT JOIN** )
 
 右边为主表，连接左边，右边对应到左边，如果左边没有则为None。
 
- ![img](https://www.runoob.com/wp-content/uploads/2014/03/img_rightjoin.gif) 
+ ![img](https://www.runoob.com/wp-content/uploads/2014/03/img_rightjoin.gif)
 
 ```mysql
 # 查询 学生的班级信息，学生表stu通过class_id 与班级表关联
@@ -392,7 +394,7 @@ from stu right join class c on stu.class_id =c.id
 
 将左右两边共有的数据进行连接。
 
- ![img](https://www.runoob.com/wp-content/uploads/2014/03/img_innerjoin.gif) 
+ ![img](https://www.runoob.com/wp-content/uploads/2014/03/img_innerjoin.gif)
 
 ```mysql
 # 查询 学生的班级信息，学生表stu通过class_id 与班级表关联
@@ -641,7 +643,7 @@ select function(列值1...) from table
 
 ## 事务
 
- 事务是指是程序中一系列严密的逻辑操作，而且所有操作必须全部成功完成，否则在每个操作中所作的所有更改都会被撤消。可以通俗理解为：就是把多件事情当做一件事情来处理，好比大家同在一条飞机上，要活一起活，要完一起完 。 
+ 事务是指是程序中一系列严密的逻辑操作，而且所有操作必须全部成功完成，否则在每个操作中所作的所有更改都会被撤消。可以通俗理解为：就是把多件事情当做一件事情来处理，好比大家同在一条飞机上，要活一起活，要完一起完 。
 
 #### 四大特性
 
@@ -719,13 +721,11 @@ InnoDB表数据文件本身就是主索引，叶节点data域保存了完整的�
 
 B-TREE：
 
-​			因为每个节点上都会存储数据，就会导致每一个节点上面的degree小，从而是存储的数据量会变得很小。 举个例子：只考虑图中的 16和data 这样的数据的大小，假设为1K，那么第三层存储的数。
+​   因为每个节点上都会存储数据，就会导致每一个节点上面的degree小，从而是存储的数据量会变得很小。 举个例子：只考虑图中的 16和data 这样的数据的大小，假设为1K，那么第三层存储的数。
 
 B+tree：
 
-​		不是叶子节点的只存储关键的比较的数据值。并且这个值占存储空间越小越好，因为这样就会可以使非叶子节点的degree更大，比如   16K中   假设 指针+比较值=10B 和  等于 5B  ，5B对应所存储的就是10B存储的数据量的4倍，因为 第一层是两倍 第二层也是两倍，第三层存储数据degree一样。举个例子：每个节点的大小为16k(mysql每次读取的大小为16K)，而 指针+比较值 假设为10B，简单计算degree=16*1024/10 =1600  而第二层 就是 1600*1600 第三层是数据层 每个数据大小为1K，那么每个节点存储16个，三层下来就能存储 1600*1600*16=40960000个数据。
-
-
+​  不是叶子节点的只存储关键的比较的数据值。并且这个值占存储空间越小越好，因为这样就会可以使非叶子节点的degree更大，比如   16K中   假设 指针+比较值=10B 和  等于 5B  ，5B对应所存储的就是10B存储的数据量的4倍，因为 第一层是两倍 第二层也是两倍，第三层存储数据degree一样。举个例子：每个节点的大小为16k(mysql每次读取的大小为16K)，而 指针+比较值 假设为10B，简单计算degree=16*1024/10 =1600  而第二层 就是 1600*1600 第三层是数据层 每个数据大小为1K，那么每个节点存储16个，三层下来就能存储 1600*1600*16=40960000个数据。
 
 #### Hash索引
 
@@ -775,7 +775,7 @@ R-Tree在MySQL很少使用，仅支持geometry数据类型，支持该类型的�
 
 将几个字段联合创建的索引。
 
-#### 全文索引 
+#### 全文索引
 
 Mysql中用的少，且例如ES(作为搜索数据库)中用的更为好。
 
@@ -785,11 +785,11 @@ Mysql中用的少，且例如ES(作为搜索数据库)中用的更为好。
 
 ##### 聚簇索引
 
-​				B+Tree是根据主键索引的，叶子节点上的数据即为要查询行的数据，一个表仅仅只有一个聚簇索引。
+​    B+Tree是根据主键索引的，叶子节点上的数据即为要查询行的数据，一个表仅仅只有一个聚簇索引。
 
 ##### 非聚簇索引(辅助索引)
 
-​				叶子节点上的数据为主键，通过聚簇索引得到的主键还需要通过查一下聚簇索引才能得到数据(这个过程叫回表)。一个表可以有多个非聚簇索引。
+​    叶子节点上的数据为主键，通过聚簇索引得到的主键还需要通过查一下聚簇索引才能得到数据(这个过程叫回表)。一个表可以有多个非聚簇索引。
 
 ![1645109151313](C:\Users\will\AppData\Roaming\Typora\typora-user-images\1645109151313.png)
 
@@ -825,7 +825,7 @@ show index from table_name
 show global status like 'Com_____'
 ```
 
-参考：https://blog.csdn.net/shan_zhi_jun/article/details/79322395
+参考：<https://blog.csdn.net/shan_zhi_jun/article/details/79322395>
 
 #### 慢查询分析
 
@@ -890,39 +890,39 @@ select的类型，有如下几种情况
 
 表示不需要union操作或者不包含子查询的简单查询。
 
-######  *primary*
+###### *primary*
 
 表示最外层查询。
 
-######  *union*
+###### *union*
 
 union操作中第二个及之后的查询。
 
-######  *dependent union*
+###### *dependent union*
 
 union操作中第二个及之后的查询，并且该查询依赖于外部查询。
 
-######  *subquery*
+###### *subquery*
 
 子查询中的第一个查询。
 
-######  *dependent subquery*
+###### *dependent subquery*
 
 子查询中的第一个查询，并且该查询依赖于外部查询。
 
-######  derived
+###### derived
 
 派生表查询，既from字句中的子查询。
 
-######  materialized
+###### materialized
 
 物化查询。
 
-######  uncacheable subquery
+###### uncacheable subquery
 
 无法被缓存的子查询，对外部查询的每一行都需要重新进行查询。
 
-######  uncacheable union
+###### uncacheable union
 
 union操作中第二个及之后的查询，并且该查询属于uncacheable subquery。
 
@@ -932,29 +932,29 @@ union操作中第二个及之后的查询，并且该查询属于uncacheable sub
 
 ###### null
 
-​	无需访问表或者索引，比如获取一个索引列的最大值或最小值。
+​ 无需访问表或者索引，比如获取一个索引列的最大值或最小值。
 
 ###### *system/const*
 
 当查询最多匹配一行时，常出现于where条件是＝的情况。system是const的一种特殊情况，既表本身只有一行数据的情况。
 
-######  eq_ref
+###### eq_ref
 
 多表关联查询时，根据唯一非空索引进行查询的情况。
 
-######  *ref*
+###### *ref*
 
 多表查询时，根据非唯一非空索引进行查询的情况。
 
-######  *range*
+###### *range*
 
 在一个索引上进行范围查找。
 
-######  *index*
+###### *index*
 
 遍历索引树查询，通常发生在查询结果只包含索引字段时。
 
-######  all
+###### all
 
 全表扫描，没有任何索引可以使用时。这是最差的情况，应该避免。
 
@@ -968,11 +968,11 @@ union操作中第二个及之后的查询，并且该查询属于uncacheable sub
 
 ##### key_len
 
- 使用的索引的长度。该值越小越好。 
+ 使用的索引的长度。该值越小越好。
 
 ##### rows
 
- 估计此次查询所需读取的行数。该值越小越好。 
+ 估计此次查询所需读取的行数。该值越小越好。
 
 ##### ref
 
@@ -988,7 +988,7 @@ using index condition: 查询中使用到了索引，但是需要回表再查。
 
 using index using in:使用到了索引，且直接能拿到数据。
 
-参考：https://blog.csdn.net/poxiaonie/article/details/77757471
+参考：<https://blog.csdn.net/poxiaonie/article/details/77757471>
 
 ### 使用原则
 
@@ -1002,7 +1002,7 @@ using index using in:使用到了索引，且直接能拿到数据。
 
 ②左边的存在，但是跳过了中间字段，则只会走左边存在的，
 
-​	例如select使用了name，gender，那么用到的索引只包含name。
+​ 例如select使用了name，gender，那么用到的索引只包含name。
 
 ③如果建立索引(age,gender,name)的都存在,但是顺序不与建立的一致，
 
@@ -1012,7 +1012,7 @@ using index using in:使用到了索引，且直接能拿到数据。
 
  但是可以使用 >= ,就会走全部的索引。
 
-  例如  where name = xxx  and age<250 and gender='女' 
+  例如  where name = xxx  and age<250 and gender='女'
 
 #### 不要运算
 
@@ -1148,11 +1148,11 @@ lines terminated by \n' ;
 
 降低主键的长度，插入数据是尽量使用自增且顺序插入。
 
-页分裂,页合并:https://www.bilibili.com/video/BV1Kr4y1i7ru?p=90
+页分裂,页合并:<https://www.bilibili.com/video/BV1Kr4y1i7ru?p=90>
 
 ### order by
 
-explain 含有order by数据时候，extra可能会出现 
+explain 含有order by数据时候，extra可能会出现
 
 Using filesort :通过表的索引或全表扫描,读取满足条件的数据行，然后在排序缓冲区sort buffer中完成排序操作,所有不是通过索引直接返回排序结果的排序都叫FileSort排序
 
@@ -1168,7 +1168,7 @@ using index:通过有序索引顺序扫描直接返回有序数据,这种情况�
 
 ### group by
 
-explain 含有group by数据时候，extra可能会出现 
+explain 含有group by数据时候，extra可能会出现
 
 temporary :通过表的索引或全表扫描,读取满足条件的数据行，然后在排序缓冲区sort buffer中完成排序操作,所有不是通过索引直接返回排序结果的排序都叫FileSort排序
 
@@ -1200,13 +1200,13 @@ count用法：
 
 #### count(主键)
 
-​		InnoDB引擎会遍历整张表，把每一行的主键id值都取出来,返回给服务层。服务层拿到主键后，直接按行进行累加(主键不可能为null)。
+​  InnoDB引擎会遍历整张表，把每一行的主键id值都取出来,返回给服务层。服务层拿到主键后，直接按行进行累加(主键不可能为null)。
 
 #### count(字段)
 
-​		没有not null约束: InnoDB引擎会遍历整张表把每一行的字段值都取出来，返回给服务层,服务层判断是否为null,不为null, 计数累加。
+​  没有not null约束: InnoDB引擎会遍历整张表把每一行的字段值都取出来，返回给服务层,服务层判断是否为null,不为null, 计数累加。
 
-​	有not null约束: InnoDB 引擎会遍历整张表把每一-行的字段值都取出来, 返回给服务层，直接按行进行累加。
+​ 有not null约束: InnoDB 引擎会遍历整张表把每一-行的字段值都取出来, 返回给服务层，直接按行进行累加。
 
 #### count(1)
 
@@ -1324,14 +1324,14 @@ Mysql可以限制操作者对于表的权限，而不能限制表中数据权限
 
 且存储过程在执行一次后，二进制代码会驻留在缓冲区，下一次执行，只需要执行二进制代码就行，提高了效率
 
- 存储过程思想上很简单，就是数据库 SQL 语言层面的代码封装与重用。 
+ 存储过程思想上很简单，就是数据库 SQL 语言层面的代码封装与重用。
 
 ### 创建
 
 ```mysql
 create procedure 名称([参数列表...])
 begin
-	执行逻辑和SQL
+ 执行逻辑和SQL
 end;
 ```
 
@@ -1413,9 +1413,9 @@ select @变量名
 # 实例
 create procedure p()
 begin
-	 DECLARE num int default 0;
-	 SELECT COUNT(*) INTO num from stu;
-	 select num;
+  DECLARE num int default 0;
+  SELECT COUNT(*) INTO num from stu;
+  select num;
 end;
 ```
 
@@ -1433,16 +1433,16 @@ end if;
 # 示例，判断成绩等级
 create procedure p()
 begin
-	 DECLARE num int default 80;
-	 DECLARE lever int ;
-	 if num>85 then 
-	    set lever=1;
-	 elseif num>60 then
-	    set lever=2;
-	 else
-		  set lever=3;
-	end if;
-	SELECT lever;
+  DECLARE num int default 80;
+  DECLARE lever int ;
+  if num>85 then 
+     set lever=1;
+  elseif num>60 then
+     set lever=2;
+  else
+    set lever=3;
+ end if;
+ SELECT lever;
 end;
 ```
 
@@ -1451,22 +1451,22 @@ end;
 ```mysql
 # 方式1
 case 变量
-	when value1 then  ...
-	when value2 thne  ...
-	else    .... 
+ when value1 then  ...
+ when value2 thne  ...
+ else    .... 
 end case;
 
 # 方式二
 case  
-	when 条件1 then ...
-	when 条件2 then ...
-	else ...
+ when 条件1 then ...
+ when 条件2 then ...
+ else ...
 end case;
 
 # 示例
 create procedure p_sex()
 begin
-	declare sex int default 0;
+ declare sex int default 0;
     case sex
        when 0 then  SELECT '男';
        when 1 then  select '女';
@@ -1527,12 +1527,12 @@ end while;
 #举个例子
 create procedure cal(in n int)
 begin
-	 declare total int DEFAULT 0;
+  declare total int DEFAULT 0;
      while n do
-	    SET total = total+n;
-		  SET n = n -1;
-	 end while; 
-	 SELECT total;
+     SET total = total+n;
+    SET n = n -1;
+  end while; 
+  SELECT total;
 end;
 ```
 
@@ -1548,12 +1548,12 @@ until 条件 end repeat;
 #示例
 create procedure cal2(in n int)
 begin
-	 declare total int DEFAULT 0;
-	 REPEAT
-	    SET total = total+n;
-	    set n = n-1;
+  declare total int DEFAULT 0;
+  REPEAT
+     SET total = total+n;
+     set n = n-1;
      UNTIL n=0 END REPEAT;
-	 SELECT total;
+  SELECT total;
 end;
 ```
 
@@ -1561,12 +1561,12 @@ end;
 
 ```mysql
 lable: loop
-	...
-	# loop可以被认为是死循环，中间自写条件退出循环，leave lable
-	leave label;
-	# 自写条件直接进入下一次循环，即continue
-	iterate;
-	
+ ...
+ # loop可以被认为是死循环，中间自写条件退出循环，leave lable
+ leave label;
+ # 自写条件直接进入下一次循环，即continue
+ iterate;
+ 
 end loop lable;
 
 
@@ -1574,16 +1574,16 @@ end loop lable;
 # 举个例子
 create procedure cal3(in n int)
 begin
-	 declare total int DEFAULT 0;
-	 sum:loop
-	    if n then 
-			  set total = total +n;
-			  set n = n-1;
-			else
-			   LEAVE sum;
-			end if;
-	 END loop sum;
-	 SELECT total;
+  declare total int DEFAULT 0;
+  sum:loop
+     if n then 
+     set total = total +n;
+     set n = n-1;
+   else
+      LEAVE sum;
+   end if;
+  END loop sum;
+  SELECT total;
 end;
 ```
 
@@ -1611,16 +1611,16 @@ close 名称;
 # 此时就声明一个handler来处理这个错误，执行关闭游标的操作，类似于异常处理。
 create procedure cur()
 begin
-	 declare id int DEFAULT 0;
-	 declare name VARCHAR(20);
-	 declare c CURSOR for SELECT id,name FROM stu where gender='女';
-	 DECLARE exit HANDLER for SQLSTATE '02000' CLOSE c;
-	
+  declare id int DEFAULT 0;
+  declare name VARCHAR(20);
+  declare c CURSOR for SELECT id,name FROM stu where gender='女';
+  DECLARE exit HANDLER for SQLSTATE '02000' CLOSE c;
+ 
      OPEN c;
-	 WHILE true DO
-			FETCH c into id,name;
-			insert into girls VALUES(id,name);
-	 END WHILE;
+  WHILE true DO
+   FETCH c into id,name;
+   insert into girls VALUES(id,name);
+  END WHILE;
 end;
 ```
 
@@ -1664,12 +1664,12 @@ end;
 create FUNCTION cal(n int)
 RETURNS int DETERMINISTIC
 begin
-	 declare total int DEFAULT 0;
-	 while n do
-	    SET total = total+n;
-		  SET n = n -1;
-	 end while;
-	return total; 
+  declare total int DEFAULT 0;
+  while n do
+     SET total = total+n;
+    SET n = n -1;
+  end while;
+ return total; 
 end;
 ```
 
@@ -1688,7 +1688,7 @@ create trigger 名称
 after/before  insert/update/delete
 on table_name for rows
 begin
-	执行的操作
+ 执行的操作
 end;
 
 # 在插入之后将部分信息写入log(这儿只是演示)
@@ -1699,7 +1699,7 @@ create TRIGGER log
 after INSERT
 on stu for EACH ROW
 begin
-	INSERT INTO log VALUES (new.id,new.name) ;
+ INSERT INTO log VALUES (new.id,new.name) ;
 end;
 ```
 
@@ -1746,7 +1746,7 @@ ON SCHEDULE schedule
 # 事件需要执行的内容,执行单个句子可以直接加在do后面，执行多个则加begin/end;
 DO 
 begin 
-	event_body;
+ event_body;
 end;
 
 
@@ -1816,4 +1816,3 @@ alter event 事件名 on completion preserve disable;
 ```
 
 ## 锁
-
