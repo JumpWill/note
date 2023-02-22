@@ -1,3 +1,5 @@
+#
+
 ## namespace
 
 Linux的[命名空间](https://so.csdn.net/so/search?q=命名空间&spm=1001.2101.3001.7020)机制提供了一种**资源隔离**的解决方案。PID,IPC,Network等系统资源不再是全局性的，而是属于特定的Namespace。Linux Namespace机制为实现基于容器的虚拟化技术提供了很好的基础，LXC（Linux containers）就是利用这一特性实现了资源的隔离。不同Container内的进程属于不同的Namespace，彼此透明，互不干扰。
@@ -30,7 +32,7 @@ UTS namespace没有嵌套关系，即不存在说一个namespace是另一个name
 
 参考：
 
-​	https://www.cnblogs.com/yinzhengjie/p/12183066.html
+​ <https://www.cnblogs.com/yinzhengjie/p/12183066.html>
 
 ## 使用docker容器namespace
 
@@ -66,4 +68,3 @@ options:
 # 例如进入某pid的网络namespace
 nsenter -t pid -n
 ```
-
