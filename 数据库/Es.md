@@ -1,10 +1,10 @@
 ### 重要概念
 
-#### 倒排索引：
+#### 倒排索引
 
-​	将文本内容进行分词，然后将分词结果放到一个表中，表左边存储分词结果，右边存储其id值。在进行分词的时候直接用词遍历这个表，就能直观拿到对应的数据。
+​ 将文本内容进行分词，然后将分词结果放到一个表中，表左边存储分词结果，右边存储其id值。在进行分词的时候直接用词遍历这个表，就能直观拿到对应的数据。
 
-#### Es核心概念：
+#### Es核心概念
 
 |   Relational DB    |       Elasticsearch        |
 | :----------------: | :------------------------: |
@@ -18,7 +18,7 @@
 
 ##### 简单数据类型
 
-###### 	文本类型
+###### 文本类型
 
 | 类型    | 说明                           |
 | ------- | ------------------------------ |
@@ -46,7 +46,7 @@ JSON没有日期数据类型, 所以在ES中, 日期可以是:
 - 代表时间毫秒数的长整型数字.
 - 代表时间秒数的整数.
 
-​	https://www.jianshu.com/p/01f489c46c38
+​ <https://www.jianshu.com/p/01f489c46c38>
 
 ###### 范围类型
 
@@ -65,14 +65,14 @@ JSON没有日期数据类型, 所以在ES中, 日期可以是:
 
 ​    可以接受表示真、假的字符串或数字:
 
-​				真值: true, "true", "on", "yes", "1"...
+​    真值: true, "true", "on", "yes", "1"...
 
-​				假值: false, "false", "off", "no", "0", ""(空字符串), 0.0, 0
+​    假值: false, "false", "off", "no", "0", ""(空字符串), 0.0, 0
 
-​	②二进制
+​ ②二进制
 
  (1) `doc_values`: 该字段是否需要存储到磁盘上, 方便以后用来排序、聚合或脚本查询. 接受`true`和`false`(默认);
-(2) `store`: 该字段的值是否要和`_source`分开存储、检索, 意思是除了`_source`中, 是否要单独再存储一份. 接受`true`或`false`(默认). 
+(2) `store`: 该字段的值是否要和`_source`分开存储、检索, 意思是除了`_source`中, 是否要单独再存储一份. 接受`true`或`false`(默认).
 
 ##### 复杂数据类型
 
@@ -95,7 +95,7 @@ ES中没有专门的数组类型, 直接使用[]定义即可;
 
 ###### 对象类型
 
-​	json数据
+​ json数据
 
 ###### 地理位置
 
@@ -108,7 +108,7 @@ ES中没有专门的数组类型, 直接使用[]定义即可;
 
 ### 思维导图
 
-![img](https://img-blog.csdnimg.cn/201911061543558.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2xpdGlhbnhpYW5nX2thb2xh,size_16,color_FFFFFF,t_70) 
+![img](https://img-blog.csdnimg.cn/201911061543558.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2xpdGlhbnhpYW5nX2thb2xh,size_16,color_FFFFFF,t_70)
 
 ### 基本使用
 
@@ -132,7 +132,7 @@ xpack.security.enabled: true
 
 #### 安装插件
 
-​	bin目录下，CMD输入
+​ bin目录下，CMD输入
 
 ```shell
 # 安装插件
@@ -151,7 +151,7 @@ elasticsearch-plugin list
 
 注意：
 
-​	更新最好使用 post xxx/_update 这样只会更新对应的数据，而使用put会覆盖掉之前的数据。
+​ 更新最好使用 post xxx/_update 这样只会更新对应的数据，而使用put会覆盖掉之前的数据。
 
 ### DSL查询
 
@@ -210,7 +210,7 @@ text类型无法排序，keyword类型可以，对于text，可以用它的.keyw
 
 需要满足条件列表中的所有
 
-####  ***term***/terms
+#### ***term***/terms
 
 不进行分词搜索，仅仅支持一个字段的筛选，筛选出包含该字符的数据。
 
@@ -222,15 +222,15 @@ terms则表示根据一个列表进行匹配。
 
 然而text类型也有个keyword，不支持分词，其值也text文本内容，用keyword需要全量输入搜索信息才能被成功删选。
 
-参考：https://blog.csdn.net/dg19971024/article/details/107103201
+参考：<https://blog.csdn.net/dg19971024/article/details/107103201>
 
 ```
 {
     "query": {
-    	"terms":{
-    	"name1":"霸王别姬"
-    	}
-    	
+     "terms":{
+     "name1":"霸王别姬"
+     }
+     
         "terms": {
             "name1.keyword": ["霸王别姬","肖申克的救赎"]
         }
@@ -267,7 +267,7 @@ terms则表示根据一个列表进行匹配。
 | minimum_should_match |            一个百分数percent             | 目标字符串被分为n个词，筛选出出来的数据会包含n*percent个字符 |
 |        boost         | 权重，不设置为1，提高权重设大于1的整数。 |                                                              |
 
-####  ***multi_match*** 
+#### ***multi_match***
 
 多字段匹配，可以在每个字段后面添加^n，指定权重。各个字段也可以使用*代替前缀或者后缀。
 
@@ -302,21 +302,21 @@ POST /movie/_search
 | phrase_prefix | 按照match_phrase_prefix检索，滑动步长slop默认为0；取最高字段得分 |
 | bool_prefix   | 按照match_bool_prefix检索                                    |
 
-#####  **tie_breaker** 
+##### **tie_breaker**
 
 取值范围0-1，当type使用默认值 best_fields ，tie_breaker将会改变默认_score计算方式，采用best_field_score + tie_breaker*other_field_score。
 
-#####  **analyzer** 
+##### **analyzer**
 
 用户搜索输入词采用哪种解析器进行分词，默认使用mapping阶段指定的分词器；如果analyzer设置和索引阶段的分词器不一致时，且operator为and 那么在执行查询时可能理应完全匹配的短语结果检索为空的情况。
 
-#####  **fuzziness** 
+##### **fuzziness**
 
- 指定模糊程度，支持数字或auto 
+ 指定模糊程度，支持数字或auto
 
-#####  **prefix_length** 
+##### **prefix_length**
 
- 当使用模糊查询时，用来指定前缀不变长度 
+ 当使用模糊查询时，用来指定前缀不变长度
 
 ##### **lenient**
 
@@ -340,15 +340,15 @@ POST /movie/_search
 
 #### 组合查询
 
-#####  **must**
+##### **must**
 
-是指要同时满足多个条件 
+是指要同时满足多个条件
 
-#####  **should** 
+##### **should**
 
 满足一个条件就行。
 
-#####  **must_not** 
+##### **must_not**
 
 都不满足。
 
@@ -445,9 +445,9 @@ POST /movie/_search
 
 #### 基本概念
 
- Elasticsearch 的聚合（Aggregations）功能也十分强大，允许在数据上做复杂的分析统计。Elasticsearch 提供的聚合分析功能主要有**指标聚合（metrics aggregations）**、**桶聚合（bucket aggregations）**、**管道聚合（pipeline aggregations）**和**矩阵聚合（matrix aggregations）**四大类，管道聚合和矩阵聚合官方说明是在试验阶段，后期会完全更改或者移除，这里不再对管道聚合和矩阵聚合进行讲解。 
+ Elasticsearch 的聚合（Aggregations）功能也十分强大，允许在数据上做复杂的分析统计。Elasticsearch 提供的聚合分析功能主要有**指标聚合（metrics aggregations）**、**桶聚合（bucket aggregations）**、**管道聚合（pipeline aggregations）**和**矩阵聚合（matrix aggregations）**四大类，管道聚合和矩阵聚合官方说明是在试验阶段，后期会完全更改或者移除，这里不再对管道聚合和矩阵聚合进行讲解。
 
-参考：https://learnku.com/docs/elasticsearch73/7.3/5.1.5/6892
+参考：<https://learnku.com/docs/elasticsearch73/7.3/5.1.5/6892>
 
 #### 基本格式
 
@@ -472,13 +472,13 @@ POST /movie/_search
 
 ##### 状态(stats)/更多状态(extended_stats)
 
-如果缺损的值，可以设置 "missing": 10 
+如果缺损的值，可以设置 "missing": 10
 
 ##### 百分比(percentiles)
 
 会列出在某个百分比的数值，例如存的是1到100,5%就是5
 
-###### percentile_ranks 
+###### percentile_ranks
 
 某个数在某个范围之内，例如1到100，输入的为50，就返回50%，说明50%的在50以内。
 
@@ -538,9 +538,9 @@ POST /student/_search
 
 #### 桶聚合
 
- bucket 可以理解为一个桶，它会遍历文档中的内容，凡是符合某一要求的就放入一个桶中，分桶相当于 SQL 中的 group by。从另外一个角度，可以将指标聚合看成单桶聚合，即把所有文档放到一个桶中，而桶聚合是多桶型聚合，它根据相应的条件进行分组。 
+ bucket 可以理解为一个桶，它会遍历文档中的内容，凡是符合某一要求的就放入一个桶中，分桶相当于 SQL 中的 group by。从另外一个角度，可以将指标聚合看成单桶聚合，即把所有文档放到一个桶中，而桶聚合是多桶型聚合，它根据相应的条件进行分组。
 
-​                                                                            桶聚合种类 
+​                                                                            桶聚合种类
 
 | 种类                                          | 描述/场景                                                    |
 | :-------------------------------------------- | :----------------------------------------------------------- |
@@ -558,7 +558,7 @@ POST /student/_search
 
 查询见：
 
-https://learnku.com/docs/elasticsearch73/7.3/5113-sum-aggregation/7321
+<https://learnku.com/docs/elasticsearch73/7.3/5113-sum-aggregation/7321>
 
 ### Es修改
 
@@ -641,4 +641,3 @@ POST /logs/_search
     }
 }
 ```
-
