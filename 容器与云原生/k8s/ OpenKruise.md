@@ -1222,4 +1222,5 @@ Cascading: 这个对象如果还有可用的下属资源，则禁止被删除
 | UnitedDeployment         |       apps.kruise.io |  v1alpha1  | replicas下是否还有正常的 Pod  |
 
 ## PodUnavailableBudget
+
 <https://openkruise.io/zh/docs/user-manuals/podunavailablebudget>

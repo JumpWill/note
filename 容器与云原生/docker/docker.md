@@ -121,8 +121,3 @@ RUN pip config set install.trusted-host mirrors.aliyun.com
 ```dockerfile
 COPY ./  /code
 ```
-
-
-
-
-

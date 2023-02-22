@@ -1,19 +1,25 @@
+#
+
 ## openresty
+
 简介：自己搜
 简单来说，可以认为是在网关层进行编程。
 
 ## luajit
+
 openresty默认使用了luajit。
 luajit是一个lua的解释器，相较于官方的解释器更快。
 但是luajit仅仅支持一些lua的函数，而不是全部，如果遇到不支持的函数，
 那么就会使用lua自己的解释器，所以要避免使用luajit不支持的函数。
 
 ## openresty运行机制
+
 nginx中一个master进程，会有多分work的进程，work进程会去处理具体的http请求。
 openresty也一样。
 
 ### openresty阶段解读
-openresty不同的阶段：https://www.cnblogs.com/fly-kaka/p/11102849.html
+
+openresty不同的阶段：<https://www.cnblogs.com/fly-kaka/p/11102849.html>
 openresty各个阶段执行的指令解释及其执行顺序:
 
 | 阶段                   | 解释                                                         |
@@ -31,6 +37,7 @@ openresty各个阶段执行的指令解释及其执行顺序:
 | log_by_lua             | 记录访问日志                                                 |
 
 上诉的11个阶段的可以使用以下几种插入lua脚本的方式
+
 ```lua
 -- 1
 log_by_lua:lua code
@@ -39,16 +46,19 @@ log_by_lua_block {  lua code}
 -- 3 推荐使用
 log_by_lua_file: lua_file_path
 ```
+
 ps:
 在http处理过程中没有preread_by_lua既是preread阶段只能由openresty读取请求头的信息。
 
 ### openresty缓存
-参考：https://www.w3cschool.cn/openresty1/openresty-缓存.html
+
+参考：<https://www.w3cschool.cn/openresty1/openresty-缓存.html>
+
 ### 定时任务
+
 openresty中含有定时任务
+
 # TODO
-
-
 
 ## openresty常用函数
 
@@ -66,5 +76,4 @@ openresty中含有定时任务
 
 ### 正则表达式
 
-
-参考：https://www.w3cschool.cn/openresty1
+参考：<https://www.w3cschool.cn/openresty1>

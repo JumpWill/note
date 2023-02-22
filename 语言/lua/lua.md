@@ -1,4 +1,7 @@
+#
+
 ## 注释方式
+
 ```lua
 -- 单行注释
 
@@ -7,6 +10,7 @@
 --]]
 
 ```
+
 ## 关键字
 
 |          |       |       |        |
@@ -18,8 +22,8 @@
 | return   | then  | true  | until  |
 | while    | goto  |       |        |
 
-
 ## 变量
+
 ```lua
 -- 全局变量，删除全局变量就是把global_var置为nil
 global_var = 123
@@ -29,6 +33,7 @@ local local_var =123
 ```
 
 ## 数据类型
+
 | 数据类型 | 描述                                                         |
 | :------- | :----------------------------------------------------------- |
 | nil      | 这个最简单，只有值nil属于该类，表示一个无效值（在条件表达式中相当于false）。 |
@@ -41,7 +46,9 @@ local local_var =123
 | table    | Lua 中的表（table）其实是一个"关联数组"（associative arrays），数组的索引可以是数字、字符串或表类型。在 Lua 里，table 的创建是通过"构造表达式"来完成，最简单构造表达式是{}，用来创建一个空表。 |
 
 ### nil
+
 nil 类型表示一种没有任何有效值，它只有一个值 -- nil，例如打印一个没有赋值的变量，便会输出一个 nil 值：
+
 ```lua
 local name = nil
 -- 变量为nil的时候,
@@ -51,11 +58,15 @@ if name then:
 else
     print("this is nil")
 ```
+
 ### boolen
+
 ```lua
 local bool = true
 ```
+
 ### number
+
 Number 类型用于表示实数，和 C/C++ 里面的 double 类型很类似。可以使用数学函数 math.floor（向下取整）和 math.ceil（向上取整）进行取整操作。
 一般地，Lua 的 number 类型就是用双精度浮点数来实现的。值得一提的是，LuaJIT 支持所谓的“dual-number”（双数）模式，即 LuaJIT 会根据上下文用整型来存储整数，而用双精度浮点数来存放浮点数。
 
@@ -69,7 +80,9 @@ print(math.ceil(score))    -->output:99
 
 print(9223372036854775807LL - 1)  -->output:9223372036854775806LL
 ```
+
 ### string
+
 ```lua
 -- 三种方式,第三种方式特殊字符不会被转义
 local name = 'hello world'
@@ -87,6 +100,7 @@ print(str1)              -->打印 hello-world
 str2 = string.format("%d-%s-%.2f",123,"world",1.21)
 print(str2)              -->打印 123-world-1.21
 ```
+
 Lua 的字符串是不可改变的值，不能像在 c 语言中那样直接修改字符串的某个字符，而是根据修改要求来创建一个新的字符串。Lua 也不能通过下标来访问字符串的某个字符。
 
 想了解更多关于字符串的操作，请查看String 库章节。<https://moonbingbing.gitbooks.io/openresty-best-practices/content/lua/string_library.html>
@@ -95,11 +109,12 @@ Lua 的字符串是不可改变的值，不能像在 c 语言中那样直接修�
 
 每一个 Lua 字符串在创建时都会插入到 Lua 虚拟机内部的一个全局的哈希表中。 这意味着创建相同的 Lua 字符串并不会引入新的动态内存分配操作，所以相对便宜（但仍有全局哈希表查询的开销），内容相同的 Lua 字符串不会占用多份存储空间，
 
-
 已经创建好的 Lua 字符串之间进行相等性比较时是 O(1) 时间度的开销，而不是通常见到的 O(n)
 
 由于 Lua 字符串本质上是只读的，因此字符串连接运算符几乎总会创建一个新的（更大的）字符串。这意味着如果有很多这样的连接操作（比如在循环中使用 .. 来拼接最终结果），则性能损耗会非常大。在这种情况下，推荐使用 table 和 table.concat() 来进行很多字符串的拼接。
+
 ### table
+
 Table 类型实现了一种抽象的“关联数组”。“关联数组”是一种具有特殊索引方式的数组，索引通常是字符串（string）或者 number 类型，但也可以是除 nil 以外的任意类型的值。
 
 在内部实现上，table 通常实现为一个哈希表、一个数组、或者两者的混合。具体的实现为何种形式，动态依赖于具体的 table 的键分布特点。
@@ -136,7 +151,9 @@ print(#arr)                   --> 3
 ```
 
 在table中最好使用table.remove(table_var,xxx)
+
 ### function
+
 ```lua
 local function foo()
     print("in the function")
@@ -154,9 +171,13 @@ print(a())
 in the function
 30
 ```
+
 #### 参数
+
 ##### 普通
+
 略
+
 ```lua
 function adds(numbers)
     total = 0
@@ -173,6 +194,7 @@ nums = { 1, 2, 3, 4 }
 t = adds(nums)
 print(t)    -->> 10
 ```
+
 ##### 可变长参数
 
 可变长参数 ...
@@ -192,8 +214,11 @@ print(t)
 -->> 执行累加操作
 -->> 10
 ```
+
 ##### 传入table
+
 传入table为引用传递，如果说是函数里面改变了某些值,那么会改变函数外的table信息。
+
 ```lua
 function_name{table content}
 
@@ -223,11 +248,15 @@ worker{
 ```
 
 #### 返回值
+
 函数可以返回多个值。  
 
 ### userdata
+
 自定义类型
+
 ### thread
+
 待定
 
 ## 表达式与运算
@@ -238,6 +267,7 @@ worker{
 注意：所有逻辑操作符将 false 和 nil 视作假，其他任何值视作真，对于 and 和 or，“短路求值”，对于 not，永远只返回 true 或者 false。
 
 ## 控制结构
+
 ### if/else
 
 ```lua
@@ -271,7 +301,9 @@ repeat
  x = x-1
 until x<0
 ```
+
 ### for
+
 ```lua
 for var = begin, finish, step do
     --body
@@ -303,8 +335,10 @@ index:  4  value: d
 ```
 
 ## pairs/ipairs
+
 pairs既能遍历key/value类型数据，也能遍历数组类型数据，ipairs只能遍历key/value
 pairs遍历所有不为nil的数据，ipairs遍历到位nil的数据就会停止。
+
 ```lua
 local corp = {
     web = "www.google.com",   --索引为字符串，key = "web",
@@ -328,13 +362,13 @@ for i,j in ipairs(corp) do
 end
 
 -- 遍历的时候其实是根据存储的hash值进行遍历的，所以是先遍历的数值，然后才是字符。
--- 1	100876
--- 10	360
--- web	www.google.com
--- staff	table: 00000000001e9f00
--- city	Beijing
+-- 1 100876
+-- 10 360
+-- web www.google.com
+-- staff table: 00000000001e9f00
+-- city Beijing
 -- 分割线----------------
--- 1	100876
+-- 1 100876
 
 -- 在末尾添加new字符串
 table.insert(corp, "new")
@@ -351,6 +385,7 @@ for i,j in ipairs(corp) do
 end
 
 ```
+
 ## 模块
 
 一个单独的lua脚本可以被认为是一个模块，使用require就可以直接加载和缓存该模块，以及后续调用其方法。
@@ -421,7 +456,9 @@ end
 | "__mode"     | 用于弱表(*week table*)            |
 
 ## 面向对象编程
+
 lua中是通过table来实现面向对象编程的。
+
 ```lua
 local _M = {}
 
@@ -460,8 +497,8 @@ obj.xxx(args)
 
 文件操作 <https://moonbingbing.gitbooks.io/openresty-best-practices/content/lua/file.html>
 
-
 ## lua---协程
+
 协程又称为微线程。
 | 方法                | 描述                                                         |
 | :------------------ | :----------------------------------------------------------- |
@@ -471,6 +508,7 @@ obj.xxx(args)
 | coroutine.status()  | 查看 coroutine 的状态 注：coroutine 的状态有三种：dead，suspended，running，具体什么时候有这样的状态请参考下面的程序 |
 | coroutine.wrap（）  | 创建 coroutine，返回一个函数，一旦你调用这个函数，就进入 coroutine，和 create 功能重复 |
 | coroutine.running() | 返回正在跑的 coroutine，一个 coroutine 就是一个线程，当使用running的时候，就是返回一个 corouting 的线程号 |
+
 ```lua
 -- coroutine_test.lua 文件
 
@@ -500,7 +538,9 @@ print("----------")
 
 
 ```
-参考:https://www.runoob.com/lua/lua-coroutine.html
+
+参考:<https://www.runoob.com/lua/lua-coroutine.html>
+
 ```lua
 --协程例子
 
@@ -533,8 +573,8 @@ print("----------")
 
 ```
 
-
 ## 文件IO
+
 Lua I/O 库用于读取和处理文件。分为简单模式（和C一样）、完全模式。
 
 - 简单模式（simple model）拥有一个当前输入文件和一个当前输出文件，并且提供针对这些文件相关的操作。
@@ -552,6 +592,7 @@ Lua I/O 库用于读取和处理文件。分为简单模式（和C一样）、�
 | +    | 号表示对文件既可以读也可以写                                 |
 
 ### io模块
+
 io.read的参数
 | 模式 | 描述                                                         |
 | :--- | :----------------------------------------------------------- |
@@ -565,6 +606,7 @@ io.flush(): 向文件写入缓冲中的所有数据
 io.lines(optional file name): 返回一个迭代函数,每次调用将获得文件中的一行内容,当到文件尾时，将返回nil,但不关闭文件
 
 ### 简单模式
+
 简单模式在做一些简单的文件操作时较为合适。但是在进行一些高级的文件操作的时候，简单模式就显得力不从心。例如同时读取多个文件这样的操作，使用完全模式则较为合适。
 
 ```lua
@@ -594,7 +636,9 @@ io.close(file)
 ```
 
 ### 完全模式
+
 通常我们需要在同一时间处理多个文件。我们需要使用 file:function_name 来代替 io.function_name 方法。
+
 ```lua
 -- 以只读方式打开文件
 test = io.open("test.lua", "r")
@@ -618,6 +662,7 @@ test:close()
 
 read方法的参数与普通模式一致。
 其他方法
+
 ```lua
 file:seek(optional whence, optional offset): 设置和获取当前文件位置,成功则返回最终的文件位置(按字节),失败则返回nil加错误信息。参数 whence 值可以是:
 "set": 从文件头开始
@@ -641,7 +686,9 @@ local function add(a,b)
 end
 add(10)
 ```
+
 ### pcall/xcall
+
 ```lua
 function myfunction ()
     n = n/nil
@@ -660,16 +707,22 @@ end
 status = xpcall( myfunction, ErrorHandler )
 print( status)  -- fasle 表示出错
 ```
+
 ## 垃圾回收
+
 Lua 采用了自动内存管理。 这意味着你不用操心新创建的对象需要的内存如何分配出来， 也不用考虑在对象不再被使用后怎样释放它们所占用的内存。
+
 ### 垃圾回收机制
+
 Lua 实现了一个增量标记-扫描收集器。 它使用这两个数字来控制垃圾收集循环： 垃圾收集器间歇率和垃圾收集器步进倍率。 这两个数字都使用百分数为单位 （例如：值 100 在内部表示 1 ）。
+
 ```lua
 垃圾收集器间歇率:
     垃圾收集器间歇率控制着收集器需要在开启新的循环前要等待多久。 增大这个值会减少收集器的积极性。 当这个值比 100 小的时候，收集器在开启新的循环前不会有等待。 设置这个值为 200 就会让收集器等到总内存使用量达到 之前的两倍时才开始新的循环。
 垃圾收集器的进倍进率：
     垃圾收集器步进倍率控制着收集器运作速度相对于内存分配速度的倍率。 增大这个值不仅会让收集器更加积极，还会增加每个增量步骤的长度。 不要把这个值设得小于 100 ， 那样的话收集器就工作的太慢了以至于永远都干不完一个循环。 默认值是 200 ，这表示收集器以内存分配的"两倍"速工作
 ```
+
 Lua 提供了以下函数collectgarbage ([opt [, arg]])用来控制自动内存管理:
 collectgarbage("collect"): 做一次完整的垃圾收集循环。通过参数 opt 它提供了一组不同的功能：
 collectgarbage("count"): 以 K 字节数为单位返回 Lua 使用的总内存数。 这个值有小数部分，所以只需要乘上 1024 就能得到 Lua 使用的准确字节数（除非溢出）。
@@ -678,4 +731,4 @@ collectgarbage("setpause"): 将 arg 设为收集器的 间歇率。 返回 间�
 collectgarbage("setstepmul"): 返回 步进倍率 的前一个值。
 collectgarbage("step"): 单步运行垃圾收集器。 步长"大小"由 arg 控制。 传入 0 时，收集器步进（不可分割的）一步。 传入非 0 值， 收集器收集相当于 Lua 分配这些多（K 字节）内存的工作。 如果收集器结束一个循环将返回 true 。
 collectgarbage("stop"): 停止垃圾收集器的运行。 在调用重启前，收集器只会因显式的调用运行。
-参考：https://zhuanlan.zhihu.com/p/476061122
+参考：<https://zhuanlan.zhihu.com/p/476061122>
