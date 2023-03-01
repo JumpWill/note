@@ -308,3 +308,86 @@ print("this is 定时任务!")
 ```
 
 ## 中间件
+
+中间价：即是在请求前后加入某些操作。
+
+### 使用方法
+
+```python
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    print("this is before requests")  # 接收到request之前
+    response = await call_next(request)
+    print("this is after request before response")  # 请求方法处理之后，返回之前
+    response.headers["X-Process-Time"] = str(999)
+    return response
+
+#  未经过中间件的过滤，可以直接返回信息：
+from starlette.responses import JSONResponse
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    print("this is before requests")  # 接收到request之前
+    q = request.get("q")
+    print(q)
+    if not q:
+        return  JSONResponse({"code":250})
+    response = await call_next(request)
+    print("this is after request before response")  # 请求方法处理之后，返回之前
+    response.headers["X-Process-Time"] = str(999)
+    return response
+```
+
+### 高级中间件
+
+<https://www.starlette.io/middleware/>
+
+### 第三方
+
+增加查看请处理时间的中间件：
+
+```python
+from fastapi_restful.timing import add_timing_middleware, record_timing
+add_timing_middleware(app, record=logger.info, prefix="app", exclude="untimed")
+
+```
+
+### 一次消费的问题
+
+ <https://juejin.cn/post/6972031031155097631>
+
+在fastapi中request对象，只能在中间件中被消耗一次，然后某个中间件中对request做了操作，不能传递到下一个中间件，并且两个中间件同时使用request的信息，两个中间件的request不是一个对象，也可能会报错。中间件中可以使用request.state.key=value将想要传递的信息，传递到处理函数中。处理函数中同样方式取用。
+
+针对两个对象不能同时使用的request，解决办法是重写路由，指定fastapi的请求路由，在处理之前或者后加入自己的逻辑代码,其中也能得到中间件添加的数据。如：
+class ContextIncludedRoute(APIRoute):
+
+```python
+def get_route_handler(self) -> Callable:
+    original_route_handler = super().get_route_handler()
+
+    async def custom_route_handler(request: Request):
+        print("here is router")
+        print(request.state.role)
+        #逻辑代码
+        #不符合，可以直接返回response，例如JsonResponse
+        response: Response = await original_route_handler(request)
+        return response
+    return custom_route_handler
+
+# fastapi的app指定router
+# app.router.route_class = ContextIncludedRoute
+```
+
+## 启停服务
+
+启动服务的时刻可能去初始化数据库连接or do something；
+
+```python
+@app.on_event("startup")
+async def startup_event():
+    print("before startup")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("before shutdown")
+```
