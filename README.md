@@ -110,7 +110,7 @@
     ├── ebpf
     │   └── 认识ebpf.md
     ├── k8s
-    │   ├──  OpenKruise.md
+    │   ├── OpenKruise.md
     │   ├── K8s.md
     │   ├── details
     │   │   ├── imagepullpolicy.md
