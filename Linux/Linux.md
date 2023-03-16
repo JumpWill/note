@@ -13,6 +13,7 @@
 |               man xxx               |      解释xxx的用法，空格翻页      |
 |              help xxx              | 解释xxx(内部命令)的用法，空格翻页 |
 |              xx --help              |             外部命令             |
+|              unique                 |             去重                    |
 
 ## 常用快捷键
 
