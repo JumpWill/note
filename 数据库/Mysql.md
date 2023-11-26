@@ -918,9 +918,7 @@ union操作中第二个及之后的查询，并且该查询依赖于外部查询
 
 物化查询。
 
-###### uncacheable subquery
-
-无法被缓存的子查询，对外部查询的每一行都需要重新进行查询。
+# 
 
 ###### uncacheable union
 

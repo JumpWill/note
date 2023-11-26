@@ -520,7 +520,7 @@ spec:
 
 NodeSelector用于将pod调度到添加了指定标签的node节点上。它是通过kubernetes的label-selector机制实现的，也就是说，在pod创建之前，会由scheduler使用MatchNodeSelector调度策略进行label匹配，找出目标node，然后将pod调度到目标节点，该匹配规则是强制约束。
 
-~~~~yaml
+```yaml
 apiVersion: v1
 kind: Pod
 metadata:
@@ -532,7 +532,7 @@ spec:
     image: nginx:1.17.1
   nodeSelector: 
     nodeenv: pro # 指定调度到具有nodeenv=pro标签的节点上
-~~~~
+```
 
 #### 轻和性调度
 
