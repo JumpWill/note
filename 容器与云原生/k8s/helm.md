@@ -840,3 +840,98 @@ data:
   data7: dGVzdA==
   data8: test
 ```
+
+### 日期函数
+
+#### now函数
+
+用于返回当前日期和时间，通常与其他日期函数共同使用
+
+#### date函数
+
+用于将日期信息进行格式化。date 函数后面需要指明日期的格式，这个格式内容必须使用"2006-01-02" 或 "02/01/2006" 来标明，否则会出错.
+示例：now | date "2006-01-02" 或 now | date "02/01/2006" 注意: 格式内容必须是这两个示例的内容，内容换成其他日期都不行。
+
+#### dateInZone函数
+
+用法与date函数基本一致，只不过dataInZone函数可以指定时区返回时间，如:指定UTC时区返回时间
+示例：dateInZone "2006-01-02" (now) "UTC" #指定UTC时区返回时间
+duration函数：该函数可以将给定的秒数转换为golang 中的time.Duration类型，例如指定 95秒可以返回1m35s,秒数必须需要使用双引号,否则会返回 0s
+
+#### duration函数
+
+该函数可以将给定的秒数转换为golang 中的time.Duration类型，例如指定 95秒可以返回1m35s,秒数必须需要使用双引号,否则会返回 0s
+
+#### durationRound函数
+
+durationRound函数用于将给定的日期进行取整，保留最大的单位
+示例：durationRound "2h10m5s" #结果: 2h
+
+#### unixEpoch函数
+
+用于返回给定时间的时间戳格式
+
+示例：now | unixEpoch
+dateModify和mustDateModify函数:这两个函数用于将一个给定的日期修改一定的时间,并返回修改后的时间
+区别是: 如果修改格式错误,dateModify会返回日期未定义.而mustDateModify会返回错误
+
+#### dateModify函数 和 mustDateModify函数
+
+这两个函数用于将一个给定的日期修改一定的时间,并返回修改后的时间
+区别是: 如果修改格式错误,dateModify会返回日期未定义.而mustDateModify会返回错误
+
+#### toDate函数 和 mustToDate函数
+
+这两个函数都是用于将字符串转换成日期,第一个参数需要指明要转成的日期格式,第二个参数需要传递要转换的日期字符串
+区别是：如果字符串无法转换,toDate函数就会返回0值。mustToDate 函数无法转换时会抛出错误
+
+```text
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name  }}-cm
+  # namespace: {{ .Release.NameSpace }}
+data:
+  data1: {{ now | unixEpoch }} #unixEpoch函数:用于返回给定时间的时间戳格式 
+  data2: {{ now | date_modify "-2h" }} #将当前的时间减去2h再返回
+  data3: {{ now | mustDateModify "-2h" }} #将当前的时间减去2h再返回
+  date4: {{ toDate "2006-01-02" "2017-12-31" }} #将后面的字符串以前面的格式进行转换输出
+  date5: {{ mustToDate "2006-01-02" "2017-12-31" }} #将后面的字符串以前面的日期格式进行转换输出
+  data6: {{ now }} #now函数:用于返回当前日期和时间,通常与其他日期函数共同使用
+  data7: {{ now | date "2006-01-02" }} #date函数:用于将日期信息进行格式化,date函数后面需要指明日期的格式
+  #这个格式内容必须使用"2006-01-02"或"02/01/2006"来标明
+  data8: {{ dateInZone "2006-01-02" (now) "UTC" }} #dateInZone函数:用法与date函数基本一致,只不过dataInZone函数可以指定时区返回时间
+  data9: {{ duration "95" }} #该函数可将给定的秒数转换为golang中的time.Duration类型,如:指定95秒可返回1m35s,秒数必须需要使用双引号,否则会返回0s 
+  data10: {{ durationRound "2h10m5s" }} #结果:2h,durationRound函数用于将给定的日期进行取整,保留最大的单位 
+  data11: {{ now }} #now函数:用于返回当前日期和时间,通常与其他日期函数共同使用
+  data12: {{ now | date "2006-01-02" }} #date函数:用于将日期信息进行格式化,date函数后面需要指明日期的格式
+  #这个格式内容必须使用"2006-01-02"或"02/01/2006"来标明
+  data13: {{ dateInZone "2006-01-02" (now) "UTC" }} #dateInZone函数:用法与date函数基本一致,只不过dataInZone函数可以指定时区返回时间
+  data14: {{ duration "95" }} #该函数可将给定的秒数转换为golang中的time.Duration类型,如:指定95秒可返回1m35s,秒数必须需要使用双引号,否则会返回0s 
+  data15: {{ durationRound "2h10m5s" }} #结果:2h,durationRound函数用于将给定的日期进行取整,保留最大的单位 
+
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-cm
+  # namespace: 
+data:
+  data1: 1702473627 #unixEpoch函数:用于返回给定时间的时间戳格式 
+  data2: 2023-12-13 19:20:27.549612 +0800 CST m=-7199.853926874 #将当前的时间减去2h再返回
+  data3: 2023-12-13 19:20:27.549624 +0800 CST m=-7199.853914499 #将当前的时间减去2h再返回
+  date4: 2017-12-31 00:00:00 +0800 CST #将后面的字符串以前面的格式进行转换输出
+  date5: 2017-12-31 00:00:00 +0800 CST #将后面的字符串以前面的日期格式进行转换输出
+  data6: 2023-12-13 21:20:27.549637 +0800 CST m=+0.146098376 #now函数:用于返回当前日期和时间,通常与其他日期函数共同使用
+  data7: 2023-12-13 #date函数:用于将日期信息进行格式化,date函数后面需要指明日期的格式
+  #这个格式内容必须使用"2006-01-02"或"02/01/2006"来标明
+  data8: 2023-12-13 #dateInZone函数:用法与date函数基本一致,只不过dataInZone函数可以指定时区返回时间
+  data9: 1m35s #该函数可将给定的秒数转换为golang中的time.Duration类型,如:指定95秒可返回1m35s,秒数必须需要使用双引号,否则会返回0s 
+  data10: 2h #结果:2h,durationRound函数用于将给定的日期进行取整,保留最大的单位 
+  data11: 2023-12-13 21:20:27.549648 +0800 CST m=+0.146109293 #now函数:用于返回当前日期和时间,通常与其他日期函数共同使用
+  data12: 2023-12-13 #date函数:用于将日期信息进行格式化,date函数后面需要指明日期的格式
+  #这个格式内容必须使用"2006-01-02"或"02/01/2006"来标明
+  data13: 2023-12-13 #dateInZone函数:用法与date函数基本一致,只不过dataInZone函数可以指定时区返回时间
+  data14: 1m35s #该函数可将给定的秒数转换为golang中的time.Duration类型,如:指定95秒可返回1m35s,秒数必须需要使用双引号,否则会返回0s 
+  data15: 2h #结果:2h,durationRound函数用于将给定的日期进行取整,保留最大的单位
+```
