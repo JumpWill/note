@@ -935,3 +935,32 @@ data:
   data14: 1m35s #该函数可将给定的秒数转换为golang中的time.Duration类型,如:指定95秒可返回1m35s,秒数必须需要使用双引号,否则会返回0s 
   data15: 2h #结果:2h,durationRound函数用于将给定的日期进行取整,保留最大的单位
 ```
+
+### 字典函数
+
+用于存储key/value键值对.其中字典的key必须是字符串,value可以是任何类型
+
+#### get函数
+
+函数来获取定义字典myDict的值
+
+#### set函数
+
+用于向已有的字典中添加新的键值对,也可修改原来键值对的值
+
+#### unset函数
+
+用于删除字典中指定的key
+
+#### keys函数
+
+keys 函数用于获取一个或多个字典中所有的key 并返回一个列表。由于字典是无序的，所以每次返回的列表中key 的顺序也是会变化的。
+在指定多个字典并且字典中存在相同key的时候，这些key 都会保存在列表中。
+列表内如果包含多个相同的key，并且是无序的。可以使用sortAlpha 函数对列表进行排序，再使用uniq函数去重
+(3).hasKey函数
+(4).pluck函数
+(5).merge函数 和 mustMerge函数
+(6).mergeOverwrite函数 和 mustMergeOverwrite函数
+(7).values函数
+(8).pick函数 和 omit函数
+(9).deepCopy函数 和 mustDeepCopy函数
