@@ -383,8 +383,6 @@ spec:  #必选，Pod中容器的详细定义
 
 ![Pod的生命周期示意图（图片来自网络）](https://jimmysong.io/kubernetes-handbook/images/kubernetes-pod-life-cycle.jpg)
 
-
-
 - 挂起（Pending）：Pod 已被 Kubernetes 系统接受，但有一个或者多个容器镜像尚未创建。等待时间包括调度 Pod 的时间和通过网络下载镜像的时间，这可能需要花点时间。
 - 运行中（Running）：该 Pod 已经绑定到了一个节点上，Pod 中所有的容器都已被创建。至少有一个容器正在运行，或者正处于启动或重启状态。
 - 成功（Succeeded）：Pod 中的所有容器都被成功终止，并且不会再重启。
@@ -676,7 +674,7 @@ Tips：
 
 可以为一个 Pod 指定多个共享的 Volume。Pod 中的所有容器都可以访问共享的 volume。Volume 也可以用来持久化 Pod 中的存储资源，以防容器重启后文件丢失，之后介绍
 
-##  控制器
+## 控制器
 
 Pod控制器是管理pod的中间层，使用Pod控制器之后，只需要告诉Pod控制器，想要多少个什么样的Pod就可以了，它会创建出满足条件的Pod并确保每一个Pod资源处于用户期望的目标状态。如果Pod资源在运行中出现故障，它会基于指定策略重新编排Pod。
 
@@ -707,7 +705,7 @@ Pod控制器是管理pod的中间层，使用Pod控制器之后，只需要告�
 
 ReplicaSet的主要作用是**保证一定数量的pod正常运行**，它会持续监听这些Pod的运行状态，一旦Pod发生故障，就会重启或重建。同时它还支持对pod数量的扩缩容和镜像版本的升降级。因为有功能更前大的deployment不多解释。
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\image-20200612005524778.png)
+![avatar](./images/image-20200612005524778.png)
 
 ### Deployment
 
@@ -846,11 +844,9 @@ spec:
       maxUnavailable: 25%
 ```
 
-
-
 #### 区别
 
-##### ReplicaSet和Deployment 
+##### ReplicaSet和Deployment
 
 　ReplicaSet 也是用来管理多个 Pod 的副本，那么 Deployment 和 ReplicaSet 的区别在哪里呢？
 
@@ -887,7 +883,7 @@ kubectl rollout undo deployment/deployment_name --to-revision=x
 kubectl rollout pause deployment/deployment_name
 ```
 
-参考：https://jimmysong.io/kubernetes-handbook/concepts/deployment.html
+参考：<https://jimmysong.io/kubernetes-handbook/concepts/deployment.html>
 
 #### 金丝雀发布
 
@@ -924,8 +920,6 @@ pc-deployment-6c9f56fcfb-j2gtj   1/1     Running   0          3m31s
 kubectl rollout resume deploy pc-deployment -n dev
 ```
 
-
-
 ##### volumes
 
 kubernetes Volume卷具有明确的生命周期——与包裹它的 Pod 相同。 因此，Volume比 Pod 中运行的任何容器的存活期都长，在容器重新启动时数据也会得到保留。 当然，当一个 Pod 不再存在时，Volume也将不再存在。更重要的是，Kubernetes 可以支持许多类型的Volume卷，Pod 也能同时使用任意数量的Volume卷。
@@ -934,7 +928,7 @@ kubernetes Volume卷具有明确的生命周期——与包裹它的 Pod 相同�
 
 支持类型
 
-https://www.infoq.cn/article/ah1n57f8tge2wisquj00
+<https://www.infoq.cn/article/ah1n57f8tge2wisquj00>
 
 ```
  1 awsElasticBlockStore
@@ -967,7 +961,7 @@ https://www.infoq.cn/article/ah1n57f8tge2wisquj00
 28 vsphereVolume
 ```
 
-###  Job
+### Job
 
 Job，主要用于负责**批量处理(一次要处理指定数量任务)**短暂的**一次性(每个任务仅运行一次就结束)**任务。Job特点如下：
 
@@ -1156,9 +1150,9 @@ spec:
 
 版本不同配置不太一样，参考下面网址。
 
-参考：https://blog.csdn.net/fly910905/article/details/105375822
+参考：<https://blog.csdn.net/fly910905/article/details/105375822>
 
-https://www.cnblogs.com/centos-python/articles/13641576.html
+<https://www.cnblogs.com/centos-python/articles/13641576.html>
 
 ## Service
 
@@ -1168,7 +1162,7 @@ Endpoint是kubernetes中的一个资源对象，存储在etcd中，用来记录�
 
 一个Service由一组Pod组成，这些Pod通过Endpoints暴露出来，**Endpoints是实现实际服务的端点集合**。换句话说，service和pod之间的联系是通过endpoints实现的。
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\image-20200509191917069.png)
+![avatar](./images/image-20200509191917069.png)
 
 配置文件
 
@@ -1245,7 +1239,7 @@ spec:
 
 ExternalName类型的Service用于引入集群外部的服务，它通过`externalName`属性指定外部一个服务的地址，然后在集群内部访问此service就可以访问到外部的服务了。
 
-参考：https://www.jianshu.com/p/f2f44f2d4176
+参考：<https://www.jianshu.com/p/f2f44f2d4176>
 
 ## Ingress
 
@@ -1256,7 +1250,7 @@ ExternalName类型的Service用于引入集群外部的服务，它通过`extern
 
 基于这种现状，kubernetes提供了Ingress资源对象，Ingress只需要一个NodePort或者一个LB就可以满足暴露多个Service的需求。工作机制大致如下图表示：
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\image-20200623092808049.png)
+![avatar](./images/image-20200623092808049.png)
 
 实际上，Ingress相当于一个7层的负载均衡器，是kubernetes对反向代理的一个抽象，它的工作原理类似于Nginx，可以理解成在**Ingress里建立诸多映射规则，Ingress Controller通过监听这些配置规则并转化成Nginx的反向代理配置 , 然后对外部提供服务**。在这里有两个核心概念：
 
@@ -1321,7 +1315,7 @@ EmptyDir是在Pod被分配到Node时创建的，它的初始内容为空，并�
 
 在一个Pod中准备两个容器nginx和busybox，然后声明一个Volume分别挂在到两个容器的目录中，然后nginx容器负责向Volume中写日志，busybox中通过命令将日志内容读到控制台。
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\image-20200413174713773.png)
+![](./images/image-20200413174713773.png)
 
 举个例子
 
@@ -1357,8 +1351,7 @@ EmptyDir中数据不会被持久化，它会随着Pod的结束而销毁，如果
 
 例如将nginx的log信息通过hostpath的方式，存储到宿主机上。
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\image-20200413214031331.png)
-
+![](./images/image-20200413214031331.png)
 示例：
 
 ```yaml
@@ -1393,7 +1386,7 @@ spec:
     DirectoryOrCreate 目录存在就使用，不存在就先创建后使用
     Directory   目录必须存在
     FileOrCreate  文件存在就使用，不存在就先创建后使用
-    File 文件必须存在 
+    File 文件必须存在
     Socket  unix套接字必须存在
     CharDevice  字符设备必须存在
     BlockDevice 块设备必须存在
@@ -1404,8 +1397,7 @@ HostPath可以解决数据持久化的问题，但是一旦Node节点故障了�
 
 NFS是一个网络文件存储系统，可以搭建一台NFS服务器，然后将Pod中的存储直接连接到NFS系统上，这样的话，无论Pod在节点上怎么转移，只要Node跟NFS的对接没问题，数据就可以成功访问。
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\image-20200413215133559.png)
-
+![](./images/image-20200413215133559.png)
 NFS的配置，此处不将，只是将如何配置
 
 ```yaml
@@ -1443,8 +1435,7 @@ spec:
 - PV（Persistent Volume）是持久化卷的意思，是对底层的共享存储的一种抽象。一般情况下PV由kubernetes管理员进行创建和配置，它与底层具体的共享存储技术有关，并通过插件完成与共享存储的对接。
 - PVC（Persistent Volume Claim）是持久卷声明的意思，是用户对于存储需求的一种声明。换句话说，PVC其实就是用户向kubernetes系统发出的一种资源需求申请。
 
-![](D:\360MoveData\Users\小佰\Desktop\我自己\images\image-20200514194111567.png)
-
+![](./images/image-20200514194111567.png)
 使用了PV和PVC之后，工作可以得到进一步的细分：
 
 - 存储：存储工程师维护
@@ -1563,7 +1554,6 @@ PV 的关键配置参数说明：
           readOnly: false
   ```
   
-
 #### pvc
 
 PVC是资源的申请，用来声明对存储空间、访问模式、存储类别需求信息。下面是资源清单文件
@@ -1711,4 +1701,3 @@ spec:
     secret:
       secretName: secret
 ```
-
