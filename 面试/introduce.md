@@ -67,11 +67,10 @@
 3. 前公司介绍
     · python开发
     · 主要职责：修bug 重构代码 推动B端项目进程
-    · 离职原因: 老板做技术,想一套是一套,没有规划,不管你手上有啥事情都打断你,让敏捷开发,被折磨烦了。敏捷开发做下来并没有多少设计或者说是考虑,所以导致了很多缺陷,像雪球一样越滚越大越积累越多，然后又会打断你让你修,最终恶性循环。
+    · 离职原因: 一时间心态不太好,呆着没意义,破事太多,技术涨不了,加之管理些许混乱,但其实技不技术无所谓能把问题解决了就行。
 4. 装饰器
 
 ```python
-
 def out2(x):
     def debug(func):
         def wrapper(*args, **kwargs):
@@ -85,3 +84,53 @@ def hello():
     print("hello")
 hello()
 ```
+
+5. 迭代器
+迭代器是一个实现了__iter__()和__next__()方法的对象。它通过__next__()方法返回序列中的下一个元素，并在没有更多元素时引发StopIteration异常。以下是一个使用迭代器遍历列表的示例：
+
+```python
+numbers = [1, 2, 3]
+iter_numbers = iter(numbers)
+
+print(next(iter_numbers))  # 输出结果: 1
+print(next(iter_numbers))  # 输出结果: 2
+print(next(iter_numbers))  # 输出结果: 3
+```
+
+6. 生成器
+生成器是一种特殊的迭代器，它使用yield关键字来定义。生成器函数会暂停执行并返回一个值，然后在下一次访问时继续执行。这样可以节省内存，并使代码更简洁。以下是一个生成器函数的示例：
+
+```python
+def even_numbers(n):
+    for i in range(n):
+        if i % 2 == 0:
+            yield i
+
+for num in even_numbers(10):
+    print(num)  # 输出结果: 0, 2, 4, 6, 8
+```
+
+7. 内存同步
+   1. 队列 - Queue()
+   2. 管道：Pipe()
+   3. 共享内存 - 进程内同步
+
+8. k8s组件
+    1 Master 组件
+            1.1 kube-apiserver  # 集群接口
+            1.2 ETCD # 集群数据存储（类似数据库）
+            1.3 kube-controller-manager # 节点管理
+            1.4 cloud-controller-manager # 对接公有云接口
+            1.5 kube-scheduler # 任务调度
+    2  Node 组件
+            2.1 kubelet # 增删改查Pod，用的最多的组件也是命令，
+            2.2 kube-proxy # 为Service提供集群内服务发现和负载均衡
+    3 Container Runtime  # 容器运行时
+            Kubernetes 支持多个容器运行环境:
+                Docker、 containerd、CRI-O
+                以及任何实现Kubernetes CRI (容器运行环境接口)。
+    4 addons 插件
+            4.1 DNS # 集群内布DNS解析
+            4.2 dashborad # 用户图形界面
+            4.3 resource-usage-monitoring # 容器资源监测
+            4.4 Cluster-level Logging # 集群层面日志

@@ -1,5 +1,5 @@
 # git commit and push
-git_cp:
+cp:
 	git add .
-	git commit -m"${mes}"
+	git commit -m"${m}"
 	git push
