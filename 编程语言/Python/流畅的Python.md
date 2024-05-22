@@ -2207,11 +2207,395 @@ gc.get_counts()
 
 ## 元类
 
-元类就是一个特殊的类,用于专门创建其他类.所有的类的最终的__class__都是type
+元类就是一个特殊的类,用于专门创建其他类.所有的类的最终的__class__都是type.
+type就是所有对象的元类,type可以认为是祖师爷.
 
 ### type
 
-pass
+```python
+# type(name, bases, dict)
+# name: 类名
+# bases: 父类元组
+# dict: 属性字典
+
+A = type("A", (), {"name": 1})
+
+
+def func(self):
+    print("i am func",self.name)
+
+@staticmethod
+def static_func():
+    print("i am static_func")
+@classmethod
+def class_func(cls):
+    print("i am class_func")
+
+# 继承A
+B = type("B", (A,), {"func":func, "static_func":static_func, "class_func":class_func})
+
+# 创建的类如下
+# class B(A):
+#     def func(self):
+#         print("i am func",self.name)
+# 
+#     @staticmethod
+#     def static_func():
+#         print("i am static_func")
+
+#     @classmethod
+#     def class_func(cls):
+#        print("i am class_func")
+b = B()
+b.func()
+b.static_func()
+b.class_func()
+# i am func 1
+# i am static_func
+# i am class_func
+```
+
+### metaclass
+
+在声明类的时候可以指定用的元类,元类会负责创建类,其中可以完成自己的属性定义.
+
+```python
+# 将其中的所有类属性转换为大写
+def update_attr(class_name, class_parents, class_attrs):
+    now_attrs = {}
+    for attr_name, attr_value in class_attrs.items():
+        if not attr_name.startswith("__"):
+            now_attrs[attr_name.upper()] = attr_value
+    return type(class_name, class_parents, now_attrs)
+
+class MyClass(metaclass=update_attr):
+    name = 1
+
+MyClass.NAME
+# 使用name报错,因为已经转换为大写了,不存在小写的name
+
+class Meta(type):
+    def __new__(cls, class_name, class_parents, class_attrs):
+        now_attrs = {}
+        for attr_name, attr_value in class_attrs.items():
+            if not attr_name.startswith("__"):
+                now_attrs[attr_name.upper()] = attr_value
+        return type(class_name, class_parents, now_attrs)
+        # 或着
+        return type.__new__(cls, class_name, class_parents, now_attrs)
+
+class MyClass(metaclass=Meta):
+    name = 1
+```
+
+#### 元类实现ORM
+
+```python
+class ModelMetaclass(type):
+    """数据表模型元类"""
+
+    def __new__(mcs, cls_name, bases, attrs):
+
+        # 数据表对应关系字典
+        mappings = dict()
+
+        # 过滤出对应数据表的字段属性
+        for k, v in attrs.items():
+            # 判断是否是对应数据表的字段属性, 因为attrs中包含所有的类属性
+            # 这里就简单判断字段是元组
+            if isinstance(v, tuple):
+                mappings[k] = v
+
+        # 删除这些已经在字典中存储的字段属性
+        for k in mappings.keys():
+            attrs.pop(k)
+
+        # 将之前的uid/name/email/password以及对应的对象引用、类名字
+        # 用其他类属性名称保存
+        attrs['__mappings__'] = mappings  # 保存属性和列的映射关系
+        attrs['__table__'] = cls_name  # 假设表名和类名一致
+        return type.__new__(mcs, cls_name, bases, attrs)
+
+
+class Model(object, metaclass=ModelMetaclass):
+    """数据表模型基类"""
+
+    def __init__(self, **kwargs):
+        for name, value in kwargs.items():
+            setattr(self, name, value)
+
+    def save(self):
+        fields = []
+        args = []
+        for k, v in self.__mappings__.items():
+            fields.append(v[0])
+            # 因为下面的是这样('uid', "int unsigned"),取出0,即为数据库表的字段信息
+            args.append(getattr(self, k, None))
+
+        # 把参数数据类型对应数据表的字段类型
+        args_temp = list()
+        for temp in args:
+            if isinstance(temp, int):
+                args_temp.append(str(temp))
+            elif isinstance(temp, str):
+                args_temp.append(f"'{temp}'")
+
+        # 表名
+        table_name = self.__table__
+        # 数据表中的字段
+        fields = ','.join(fields)
+        # 待插入的数据
+        args = ','.join(args_temp)
+
+        # 生成sql语句
+        sql = f"""insert into {table_name} ({fields}) values ({args})"""
+        print(f'SQL: {sql}')
+
+        # 执行sql语句
+        # ...
+
+
+class User(Model):
+    """用户表模型类"""
+    uid = ('uid', "int unsigned")
+    name = ('username', "varchar(30)")
+    email = ('email', "varchar(30)")
+    password = ('password', "varchar(30)")
+
+
+def main():
+    user = User(uid=123, name='jumpwill', email='707979910@qq.com', password='123456')
+    user.save()
+
+
+if __name__ == '__main__':
+    main()
+
+
+```
+
+## 属性描述符
+
+描述符是Python中一种特殊的对象，它具有特殊方法__get__、__set__和__delete__。
+描述符主要用来实现数据绑定和属性验证。
+
+描述符需要放在类属性里,而不是实例属性.
+
+下面的代码中name是B的描述符。
+
+```python
+class A:
+    name = 1
+
+    def __get__(self,instance ,owner):
+        print("self",self)         # A的实例对象
+        print("instance",instance) # B的实例对象，即是下面的b
+        print("owner",owner)       # B的class,即使instance.__class__
+        return self.name
+
+    def __set__(self,instance , value):
+        print("self",self)        # A的实例对象 
+        print("value",value)      # 等于的值
+        print("instance",instance)      # B的实例对象，即是下面的b
+        self.name = value    
+
+    def __delete__(self,instance):
+        print(self)              # A的实例对象
+        print("instance",instance)     # B的实例对象，即是下面的b
+        del self.name
+        
+class B:
+    name = A()
+
+
+b = B()
+b.name
+# self <__main__.A object at 0x7fc8d76a54f0>
+# instance <__main__.B object at 0x7fc8d7948370>
+# owner <class '__main__.B'>
+b.name = 2
+# self <__main__.A object at 0x7fc8d76a54f0>
+# value 2
+# instance <__main__.B object at 0x7fc8d7948370>
+del b.name
+# <__main__.A object at 0x7fc8d76a54f0>
+# instance <__main__.B object at 0x7fc8d7948370>
+```
+
+### 调用时机
+
+当python解释器遇到类代码的时候,实际上会进行调用,保证解释器能知道创建类需要有哪些东西,比如属性、方法等等。
+
+```python
+class A:
+    name = 1
+
+    def __get__(self,instance ,owner):
+        print("self",self)         # A的实例对象
+        print("instance",instance) # B的实例对象，即是下面的b
+        print("owner",owner)       # B的class,即使instance.__class__
+        return self.name
+
+    def __set__(self,instance , value):
+        print("self",self)        # A的实例对象 
+        print("value",value)      # 等于的值
+        print("instance",instance)      # B的实例对象，即是下面的b
+        self.name = value    
+
+    def __delete__(self,instance):
+        print(self)              # A的实例对象
+        print("instance",instance)     # B的实例对象，即是下面的b
+        del self.name
+    print("888")
+        
+class B:
+    name = A()
+    print("9999")
+# 会输出
+# 8888
+# 9999
+```
+
+### 为什么需要描述符
+
+#### 封装
+
+使用描述符,可以set中验证属性的类型,且实现在类的内部,达到一种高内聚低耦合的设计.
+
+#### 相对于property方便
+
+使用property,只能对一个属性进行验证,如果想校验多个属性,使用property会很多,而描述符可以对多个属性进行验证。pydantic也是这样实现的.
+
+```python
+class A:
+    def __init__(self, type, value, min, max):
+        self.__type = type
+        self.__min = min
+        self.__max = max
+        self.__value = value
+
+    def __get__(self, instance, owner):
+        return self.__value
+
+    def __set__(self, owner, value):
+        if not isinstance(value, self.__type):
+            raise TypeError(f"类型错误 希望是{self.__type} ,传入的是{type(value)}")
+            
+        if self.__type == str:
+            if len(value) <  self.__min  or len(value) > self.__max:
+                raise ValueError(f"值错误 最大长度{self.__max} 最小长度{self.__min}")
+        if self.__type == int:
+            if value < self.__min  or value > self.__max:
+                raise ValueError(f"值错误 最大值{self.__max} 最小值{self.__min}")
+        self.__value = value
+
+    def __delete__(self, owner):
+        del self.__value
+
+class B:
+    name = A(str, "1234", 5, 10)
+    age = A(int, 12, 5, 100)
+
+    def __init__(self,name,age):
+        # 这里会调用上面的set
+        self.name = name
+        self.age = age
+b = B("11111",5)
+# 因为init里会调用set
+# 所以会做相关的类型校验
+```
+
+### __dict__
+
+__dict__是python中一个特殊的属性，它返回一个字典，字典的键是实例的属性名，值是属性的值。
+
+### 数据描述符和非数据描述符
+
+有get/set方法,就是数据描述符。使用数据描述符的时候,设置值调用对应类的set方法,获取值的时候调用对应类的get方法。
+有get方法,就是非数据描述符。而非数据描述符,如果init函数里面也像数据描述符那样的初始化,那么这个属性就是实例属性,而不同于数据描述符，获取值的时候也不会调用get方法,因为它只是个实例属性.
+
+如果下面的C的init方法里,去掉self.b = b,获取.b的时候就会调用B类的get方法。此时就和数据描述符一样。
+
+在一个实例寻找它的属性的时候，有着循序以下优先级,
+如果在数据描述符里找不到了某属性,就会在实例属性里找,找到了就停止了,找不到继续在非数据描述符里找。
+数据描述符 > 实例属性 > 非数据描述服
+
+```python
+class A:
+
+    def __init__(self):
+        self.__value = "A"
+
+    def __get__(self, instance, owner):
+        print("i am get in A")
+        return self.__value
+
+    def __set__(self, owner, value):
+        print("i am set in A")
+        self.__value = value
+
+    def __delete__(self, owner):
+        del self.__value
+
+class B:
+    def __init__(self):
+        self.__value = "B"
+
+    def __get__(self, instance, owner):
+        print("i  am get in B")
+        return self.__value
+
+class C:
+    a = A()
+    b = B()
+
+
+    def __init__(self, a,b):
+        # 调用A的set
+        self.a = a
+        # 此处可以注释一下句在看程序运行的变化
+        self.b = b
+c = C(1,2)
+# i am set in A
+print(c.a)  
+# i am get in A
+# 1
+print(c.b) # 如果是实例对象访问,则是因为无set方法,会将b作为一个对象的实例属性 此处没有打印i  am get in B ,则也说明没有使用B类,而是仅仅将b作为了一个实例属性
+# 2
+print(C.b) # 如果是类对象访问,返回的将是描述符,即B本身,使用了get方法
+# i  am get in B
+# B
+```
+
+### 练习
+
+#### 使用描述符实现static
+
+```python
+class Static:
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, instance, owner):
+        def wrapper(*args, **kwargs):
+            return self.func(owner, *args, **kwargs)
+        return wrapper
+
+class A:
+    name = "i am name"
+
+    @Static
+    # 此处相当于是 Static(test)
+    # 因为其中实现了get,
+    # 当调用的A.b的时候返回是wrapper,然后使用()即调用方法了
+    # 描述符返回了一个函数,使用()即使调用方法
+    def test(cls, num):
+        print("test,", num)
+        print(cls.name)
+
+A().test(num=1)
+A.test(num=1)
+```
 
 ### __getattr__和__getattribute__
 
@@ -2239,4 +2623,40 @@ print(obj.name)
 # None
 # Accessing attribute name
 # 1
+```
+
+#### 惰性计算
+
+```python
+class Lazy:
+
+    def __init__(self, func):
+        # 使用装饰器的时候,将area传递了进来
+        self.func = func
+
+    def __get__(self, instance, owner):
+        # 因为func是一个方法,所以需要将instance作为self传递进去
+        value = self.func(instance)
+        print("i am get")
+        # 给Circle的实例对象添加了area的属性,保证下次再次调用的时候,直接就使用area的属性
+        # 数据描述符号 > 实例属性 > 非数据描述服
+        setattr(instance, self.func.__name__, value)
+        return value
+
+
+class Circle:
+    pi = 3.14
+
+    def __init__(self, radius):
+        self.radius = radius
+
+    @Lazy
+    def area(self):
+        return self.radius * self.radius * self.pi
+c = Circle(2)
+c.area   # 因为c里面没有area方法,但是它是飞数据描述符,所以第一次调用就执行方法,并且对实例对象设置一个area的属性,共给下次调用
+# i am get
+# 12.56
+c.area
+# 12.56 # 直接调用了实例对象的area属性
 ```
