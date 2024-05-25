@@ -918,7 +918,7 @@ union操作中第二个及之后的查询，并且该查询依赖于外部查询
 
 物化查询。
 
-# 
+#
 
 ###### uncacheable union
 
@@ -1814,3 +1814,7 @@ alter event 事件名 on completion preserve disable;
 ```
 
 ## 锁
+
+## 日志
+
+## 隔离级别
