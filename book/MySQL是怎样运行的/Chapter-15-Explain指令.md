@@ -1397,7 +1397,6 @@ mysql> EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s1.key1 = s2.key1 WHERE s1.comm
 |名称|描述|
 |------|-------|
 | No tables used | 当查询语句的没有FROM子句时将会提示该额外信息 |
-
 | Impossible WHERE | 查询语句的WHERE子句永远为FALSE时将会提示该额外信息 |
 | No matching min/max row | 当查询列表处有MIN或者MAX聚集函数，但是并没有符合WHERE子句中的搜索条件的记录时，将会提示该额外信息 |
 | Using index | 当我们的查询列表以及搜索条件中只包含属于某个索引的列，也就是在可以使用索引覆盖的情况下，在Extra列将会提示该额外信息。 |
