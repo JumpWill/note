@@ -422,7 +422,7 @@ POST /movie/_search
 
 将目标字符创高亮
 
-```
+```dsl
 {
     "query": {
         "match": {
@@ -453,7 +453,7 @@ POST /movie/_search
 
 #### 基本格式
 
-```
+```dsl
 "aggs" : { <!-- 最外层的聚合键，也可以缩写为 aggs -->
     "<aggregation_name>" : { <!-- 聚合的自定义名字 -->
         "<aggregation_type>" : { <!-- 聚合的类型，指标相关的，如 max、min、avg、sum，桶相关的 terms、filter 等 -->
@@ -488,7 +488,7 @@ POST /movie/_search
 
 ##### 例子
 
-```
+```dsl
 POST /student/_search
 {
   "query": {

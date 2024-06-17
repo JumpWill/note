@@ -743,7 +743,7 @@ buf_free 生成redo日志在bog_buffer里的位置
 InnoDB规定初始的lsn值为8704（也就是一条redo日志也没写入时，lsn的值为8704）。
 写入了多大的redo日志,那么 lsn就会+多少
 
-#### lsn in disk
+#### lsn in disk(redo)
 
 flushed_to_disk_lsn 刷入磁盘的数据对应在log_buffer里的位置
 redo日志是首先写到log buffer中，之后才会被刷新到磁盘上的redo日志文件。所以设计InnoDB的大佬提出了一个称之为buf_next_to_write的全局变量，标记当前log buffer中已经有哪些日志被刷新到磁盘中了,
@@ -753,3 +753,31 @@ flushed_to_disk_lsn <= buf_free
 如果两者的值相同时，说明log buffer中的所有redo日志都已经刷新到磁盘中了。
 
 #### flush链表中的LSN
+
+修改了后的数据,会及时刷入磁盘,即真正的修改数据刷入磁盘.
+每一个事务更改数据会被写入道buffer pool的flush链表中,其中就有
+
+- `oldest_modification`：如果某个页面被加载到`Buffer Pool`后进行第一次修改，那么就将修改该页面的`mtr`开始时对应的`lsn`值写入这个属性。
+
+- `newest_modification`：每修改一次页面，都会将修改该页面的`mtr`结束时对应的`lsn`值写入这个属性。也就是说该属性表示页面最近一次修改后对应的系统`lsn`值。
+
+在checkpoint的操作中会用到oldest_modification,将其刷入redo日志中,作为redo日志里的checkpoint_lsn
+
+#### checkpoint_lsn
+
+redo日志里记录的checkpoint_lsn,该值表示着那些信息已经被刷入磁盘了,即小于该lsn的数据都已经被刷入了磁盘了,
+对应的日志即无效了可以被重写.
+
+##### checkpoint
+
+如果一个链表上的数据被刷入了磁盘,flush链表对应的数据的oldest_modification,刷入redo日志的checkpoint_lsn,这个过程称为checkpoint.
+
+### 崩溃恢复
+
+#### 确定起点
+
+因为有两个redo日志文件，所以崩溃恢复时，需要确定哪个文件是起点,找到那个日志的checkpoint_no(即redo日志里的checkpoint_lsn)
+
+#### 确定终点
+
+写了日志的部分

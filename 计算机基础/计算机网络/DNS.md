@@ -16,7 +16,7 @@ DNS是个啥？有一次面试被问到DNS域名解析流程，
 
 你可以在windows系统下cmd中输入以下命令查看163的所有IP信息以及查看自己的DNS缓存(会过期)。
 
-```
+```shell
 #查看163 ip
 nslookup www.163.com
 # 查看本机的dns缓存
