@@ -184,7 +184,7 @@ Histogram和Summary主用用于统计和分析样本的分布情况.
 
 告警能力在Prometheus的架构中被划分成两个独立的部分。如下所示，通过在Prometheus中定义AlertRule（告警规则），Prometheus会周期性的对告警规则进行计算，如果满足告警触发条件就会向Alertmanager发送告警信息。
 
-![img](./imgs/alert.png)
+![img](./imgs/alert.jpg)
 
 在Prometheus中一条告警规则主要由以下几部分组成：
 

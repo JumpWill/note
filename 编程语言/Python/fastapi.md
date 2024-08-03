@@ -23,7 +23,7 @@ FastAPI 是一个用于构建 API 的现代、快速（高性能）的 web 框�
 
 ### 相关配置
 
- ```python
+```python
 debug: bool = False
 docs_url: str = "/docs"
 openapi_prefix: str = ""
@@ -32,7 +32,7 @@ redoc_url: str = "/redoc"
 title: str = "FastAPI"
 version: str = "0.1.0"
 disable_docs: bool = False
- ```
+```
 
 将docs_url,redoc_url,openapi_url均设为None的情况下，disable_docs为true才会生效，也就是不能访问docs。
 

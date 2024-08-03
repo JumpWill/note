@@ -1,86 +1,3 @@
-# K8s命令格式
-
-```shell
-# comand：指定要对资源执行的操作，例如create、get、delete
-# type：指定资源类型，比如deployment、pod、service
-# name：指定资源的名称，名称大小写敏感
-# flags：指定额外的可选参数
-kubectl [command] [type] [name] [flags]
-
-# 创建某一资源，资源的类型在yaml的kind指明
-# create 创建 ，不存在创建 ，存在报错
-# apply 更新，存在更新，不存在创建 
-kubectl  create/apply -f  xxx.yaml
-
-
-# 查看某一资源信息下所有信息，resource代表资源名称，例如namespace
-# 查看某一类型下所有资源,对资源类型加个s，例如pods，namespaces
-kubectl  get resources 
-# 查看某一具体的资源名称
-kubectl  get resource  name 
-# 查看具体信息 
-kubectl  describe resource  name 
-
-
-# 删除某一资源下的某个具体资源
-kubectl delete resource name
-# 通过配置文件对删除
-kubeclt delete -f xxx.yaml
-
-# 查看某资源的ymal 
-kubectl get resource resource_name -n namespace_name -o yaml
-```
-
-### 资源
-
-| 资源分类      | 资源名称                 | 缩写    | 资源作用        |
-| :------------ | :----------------------- | :------ | :-------------- |
-| 集群级别资源  | nodes                    | no      | 集群组成部分    |
-| namespaces    | ns                       | 隔离Pod |                 |
-| pod资源       | pods                     | po      | 装载容器        |
-| pod资源控制器 | replicationcontrollers   | rc      | 控制pod资源     |
-|               | replicasets              | rs      | 控制pod资源     |
-|               | deployments              | deploy  | 控制pod资源     |
-|               | daemonsets               | ds      | 控制pod资源     |
-|               | jobs                     |         | 控制pod资源     |
-|               | cronjobs                 | cj      | 控制pod资源     |
-|               | horizontalpodautoscalers | hpa     | 控制pod资源     |
-|               | statefulsets             | sts     | 控制pod资源     |
-| 服务发现资源  | services                 | svc     | 统一pod对外接口 |
-|               | ingress                  | ing     | 统一pod对外接口 |
-| 存储资源      | volumeattachments        |         | 存储            |
-|               | persistentvolumes        | pv      | 存储            |
-|               | persistentvolumeclaims   | pvc     | 存储            |
-| 配置资源      | configmaps               | cm      | 配置            |
-|               | secrets                  |         | 配置            |
-
-### 动作
-
-| 命令分类   | 命令         | 翻译                        | 命令作用                     |
-| :--------- | :----------- | :-------------------------- | :--------------------------- |
-| 基本命令   | create       | 创建                        | 创建一个资源                 |
-|            | edit         | 编辑                        | 编辑一个资源                 |
-|            | get          | 获取                        | 获取一个资源                 |
-|            | patch        | 更新                        | 更新一个资源                 |
-|            | delete       | 删除                        | 删除一个资源                 |
-|            | explain      | 解释                        | 展示资源文档                 |
-| 运行和调试 | run          | 运行                        | 在集群中运行一个指定的镜像   |
-|            | expose       | 暴露                        | 暴露资源为Service            |
-|            | describe     | 描述                        | 显示资源内部信息             |
-|            | logs         | 日志输出容器在 pod 中的日志 | 输出容器在 pod 中的日志      |
-|            | attach       | 缠绕进入运行中的容器        | 进入运行中的容器             |
-|            | exec         | 执行容器中的一个命令        | 执行容器中的一个命令         |
-|            | cp           | 复制                        | 在Pod内外复制文件            |
-|            | rollout      | 首次展示                    | 管理资源的发布               |
-|            | scale        | 规模                        | 扩(缩)容Pod的数量            |
-|            | autoscale    | 自动调整                    | 自动调整Pod的数量            |
-| 高级命令   | apply        | rc                          | 通过文件对资源进行配置       |
-|            | label        | 标签                        | 更新资源上的标签             |
-| 其他命令   | cluster-info | 集群信息                    | 显示集群信息                 |
-|            | version      | 版本                        | 显示当前Server和Client的版本 |
-
-# K8S中的对象
-
 ## Namespace
 
 Namespace是对一组资源和对象的抽象集合，比如可以用来将系统内部的对象划分为不同的项目组或用户组。常见的pods, services, replication controllers和deployments等都是属于某一个namespace的（默认是default），而node, persistentVolumes等则不属于任何namespace。
@@ -120,9 +37,9 @@ kubectl delete namespace xxx
 kubectl delete -f xxx.yaml
 ```
 
-### 资源限制
+## 资源限制
 
-#### Resource Quota
+### Resource Quota
 
 Resource Quota即资源配额，限定单个namespace中可使用集群资源的总量，包括两个维度：
 
@@ -148,7 +65,7 @@ spec:
     services: 6                 # 该namespace中，service量
 ```
 
-#### Resource Limit Range
+### Resource Limit Range
 
 Resource Limit Range 则是对具体某个Pod或容器的资源使用进行限制。默认情况下，namespace中Pod或容器的资源消耗是不受限制的，这就可能导致某个容器应用内存泄露耗尽资源影响其它应用的情况。Limit Range可以用来限定namespace内Pod（或容器）可以消耗资源的数量。
 
