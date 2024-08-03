@@ -73,7 +73,7 @@ view ：视图
 
 viewmodel：vue中的实例对象。
 
-![1638705603884](C:\Users\will\AppData\Roaming\Typora\typora-user-images\1638705603884.png)
+<!-- ![1638705603884](C:\Users\will\AppData\Roaming\Typora\typora-user-images\1638705603884.png) -->
 
 ### Object.defineProperty
 
