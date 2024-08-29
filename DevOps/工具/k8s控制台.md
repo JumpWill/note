@@ -9,3 +9,7 @@ ui比较好看,功能齐全,列表项我用的版本没有sts,dm等资源,比较
 ## rancher
 
 国外项目,稍微用过下,不是很符合使用习惯
+
+## dashborad
+
+官方dashbord
