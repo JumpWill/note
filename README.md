@@ -31,6 +31,10 @@
         <img src="https://go.dev/images/favicon-gopher-plain.png" alt="icon" width="48" height="48" />
       <br>Golang
     </td>
+    <td align="center" width="96">
+        <img src="https://www.markdownguide.org/assets/favicons/apple-touch-icon.png" alt="icon" width="48" height="48" />
+      <br>Markdown
+    </td>
 </tr>
 <tr>
  <td align="center" width="96">

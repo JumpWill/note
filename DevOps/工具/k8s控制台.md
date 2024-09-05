@@ -12,4 +12,4 @@ ui比较好看,功能齐全,列表项我用的版本没有sts,dm等资源,比较
 
 ## dashborad
 
-官方dashbord
+官方dashbord,比较简陋,功能齐全.
