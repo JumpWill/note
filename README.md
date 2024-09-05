@@ -19,12 +19,6 @@
 
 ## Description
 
-### Talk with Jumpwill
-
-[<img align="left" alt="holisitc_developer | Github" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/github.svg" />][github]
-
-<br/>
-
 ## JumpWill favorite tools and technologies ⚙️
 
 <table align="center">
