@@ -121,9 +121,15 @@
 <tr>
     <td align="center" width="96">
       <a href="#ubuntu" >
-        <img src="https://c.s-microsoft.com/favicon.ico" width="48" height="48" alt="ubuntu" />
+        <img src="https://c.s-microsoft.com/favicon.ico" width="48" height="48" alt="Windows" />
       </a>
       <br>Windows
+    </td>
+        <td align="center" width="96">
+      <a href="#ubuntu" >
+        <img src="https://support.apple.com/content/dam/edam/applecare/images/en_US/psp/psp_content/content-block-sm-macos_2x.png" width="48" height="48" alt="MacOS" />
+      </a>
+      <br>MacOS
     </td>
     <td align="center" width="96">
       <a href="#ubuntu" >
@@ -131,15 +137,15 @@
       </a>
       <br>Ubuntu
     </td>
-     <td align="center"  width="96">
-      <a href="https://reactjs.org/" target="_blank"> <img src="https://rockylinux.org/favicon.png" alt="react" width="40" height="40"/> </a>
-      <br>Rokcy
-    </td>
   </tr>
 <tr>
       <td align="center"  width="96">
         <img src="https://upload.wikimedia.org/wikipedia/commons/9/9a/Visual_Studio_Code_1.35_icon.svg" width="48" height="48" alt="Jamstack" />
       <br>VS Code
+    </td>
+         <td align="center"  width="96">
+        <img src="https://www.cursor.com/favicon.ico" width="48" height="48" alt="Jamstack" />
+      <br>Cursor
     </td>
 </tr>
 </table>
