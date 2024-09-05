@@ -1,47 +1,28 @@
 # Hi there 👋
 
-![Jubayer Riyad](https://readme-typing-svg.herokuapp.com?font=Inter&color=3A9CDF&size=30&weight=700&lines=Call+me+Jubayer+Riyad;JubayerRiyad)
+![Jumpwill](https://readme-typing-svg.herokuapp.com?font=Inter&color=3A9CDF&size=30&weight=700&lines=Call+me+Jubayer+Riyad;JubayerRiyad)
 
 
-## 🎓 I'm Jubayer Riyad Web Developer!!
-- ✍ You can find my projects here [portfolio]
-- 🔭 I’m currently working on my Portfolio.
+## 🎓 I'm Jumpwill DevOpser!!
+
+
 - 🌱 I’m currently learning Web Development
 - 👯 I’m looking to collaborate on open-source
 - 💬 Ask me about ... Anything
 - 😄 Pronouns: Him/His
 
 ### Skills:
-- Python, C, Java
-- HTML, CSS, JavaScript, jQuery & Bootstrap
-- PHP & mySQL (PHP Frameworks)
-- Shopify, eCommerce, Woocommerce
-- Public Speaking
+- Python, Golang, Lua
+- MySQL & Redis & Elasticsearch
+- DevOps (CI/CD, Docker, Kubernetes)
 
 <br/>
 
-<div>
-<img src="https://raw.githubusercontent.com/NdekoCode/NdekoCode/main/assets/img/banner-fullstack.gif" align="center" width="100%">
-</div>
 
+## Description 
 
-
-## Description ##
-
-[![Travis CI](https://travis-ci.org/pantheon-systems/wp-redis.svg?branch=master)](https://travis-ci.org/pantheon-systems/wp-redis) [![CircleCI](https://circleci.com/gh/pantheon-systems/wp-redis/tree/master.svg?style=svg)](https://circleci.com/gh/pantheon-systems/wp-redis/tree/master)
-
-### Talk with Jubayer Riyad, I am kinda awesome:
-[<img align="left" alt="holisitc_developer | LinkedIn" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/linkedin.svg" />][linkedin]
-[<img align="left" alt="holisitc_developer | twitter" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/twitter.svg" />][twitter]
-[<img align="left" alt="holisitc_developer | YouTube" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/youtube.svg" />][youtube]
-[<img align="left" alt="holisitc_developer | Instagram" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/instagram.svg" />][instagram]
+### Talk with Jumpwill
 [<img align="left" alt="holisitc_developer | Github" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/github.svg" />][github]
-[<img align="left" alt="holisitc_developer | behance" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/behance.svg" />][behance]
-[<img align="left" alt="holisitc_developer | dribbble" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/dribbble.svg" />][dribbble]
-[<img align="left" alt="holisitc_developer | tiktok" width="22px" src="https://cdn.jsdelivr.net/npm/simple-icons@v3/icons/tiktok.svg" />][tiktok]
-
-
-
 
 <br/>
 
