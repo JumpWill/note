@@ -13,7 +13,7 @@
 
 - Python, Golang, Lua
 - MySQL & Redis & Elasticsearch
-- DevOps (CI/CD, Docker, Kubernetes, Helm, Gitlab CI/CD)
+- DevOps ( Docker, Kubernetes, Helm, Gitlab CI/CD)
 
 <br/>
 
