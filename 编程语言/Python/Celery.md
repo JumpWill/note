@@ -55,6 +55,7 @@ celery -A proj worker -P gevent -c 1000
 ### WebUI/Monitor
 
 WebUI:flower
+Monitor: prometheus+grafana
 <https://docs.celeryq.dev/en/stable/userguide/monitoring.html>
 
 ## 问题
