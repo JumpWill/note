@@ -93,7 +93,12 @@
       <br>Helm
     </td>
 </tr>
+
 <tr>
+ <td align="center" width="96">
+        <img src="https://www.poetryfoundation.org/favicon.ico?v2.0.0" width="48" height="48" alt="FastAPI" />
+      <br>Poetry
+    </td>
      <td align="center" width="96">
         <img src="https://fastapi.tiangolo.com/img/favicon.png" width="48" height="48" alt="FastAPI" />
       <br>FastAPI
