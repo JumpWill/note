@@ -49,7 +49,7 @@ celery -A proj worker -P eventlet -c 1000
 celery -A proj worker -P gevent -c 1000
 ```
 
-<https://docs.celeryq.dev/en/stable/userguide/concurrency/index.html>
+<https://docs.celeryq.dev/en/stable/userguide/concurrency/index.html><br>
 <https://stackoverflow.com/questions/42948547/which-pool-class-should-i-use-prefork-eventlet-or-gevent-in-celery>
 
 ### WebUI/Monitor
