@@ -159,5 +159,9 @@
         <img src="https://www.cursor.com/favicon.ico" width="48" height="48" alt="Jamstack" />
       <br>Cursor
     </td>
+        <td align="center"  width="96">
+        <img src="https://www.getoutline.com/favicon.png" width="48" height="48" alt="Jamstack" />
+      <br>Outline
+    </td>
 </tr>
 </table>
