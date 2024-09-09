@@ -103,6 +103,10 @@
         <img src="https://fastapi.tiangolo.com/img/favicon.png" width="48" height="48" alt="FastAPI" />
       <br>FastAPI
     </td>
+     <td align="center" width="96">
+        <img src="https://static.djangoproject.com/img/icon-touch.e4872c4da341.png" width="48" height="48" alt="FastAPI" />
+      <br>Django
+    </td>
     <td align="center" width="96">
         <img src="https://jupyter.org/favicon.ico" width="48" height="48" alt="JupyterLab" />
       <br>JupyterLab
@@ -110,7 +114,6 @@
         <td align="center" width="96">
         <img src="https://jupyter.org/assets/logos/logomark-orangebody-greyplanets.svg" width="48" height="48" alt="Postman" />
       <br>Jupyterhub
-
  </tr>
 <tr>
     <td align="center" width="96">
