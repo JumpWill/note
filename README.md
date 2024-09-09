@@ -160,7 +160,7 @@
       <br>Cursor
     </td>
         <td align="center"  width="96">
-        <img src="https://www.getoutline.com/favicon.png" width="48" height="48" alt="Jamstack" />
+        <img src="https://www.getoutline.com/favicon-32.png" width="48" height="48" alt="Jamstack" />
       <br>Outline
     </td>
 </tr>
