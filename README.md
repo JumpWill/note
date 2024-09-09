@@ -96,6 +96,10 @@
         <img src="https://goharbor.io/favicon.png" alt="icon" width="65" height="65" />
       <br>Harbor
     </td>
+      <td align="center" width="96">
+        <img src="https://www.datocms-assets.com/2885/1676497447-vault-favicon-color.png?h=192&w=192" alt="icon" width="65" height="65" />
+      <br>Vault
+    </td>
 </tr>
 
 <tr>
