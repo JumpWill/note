@@ -2,7 +2,7 @@
 
 ![Jumpwill](https://readme-typing-svg.herokuapp.com?font=Inter&color=3A9CDF&size=30&weight=700&lines=Call+me+Jump+Will;JumpWill)
 
-## 🎓 I'm Jumpwill DevOpser
+## 🎓 I'm Jumpwill ，a devOpser ！
 
 - 🌱 I’m currently learning Web Development
 - 👯 I’m looking to collaborate on open-source
