@@ -136,6 +136,10 @@
         <img src="https://dagster.cloud/portal/f8babe65/favicon.ico" width="48" height="48" alt="Dagster" />
       <br>Dagster
     </td>
+    <td align="center" width="96">
+        <img src="https://docs.pytest.org/en/stable/_static/favicon.png" width="48" height="48" alt="Pytest" />
+      <br>Pytest
+    </td>
 </tr>
 
 <tr>
