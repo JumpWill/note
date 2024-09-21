@@ -37,6 +37,8 @@ poetry source add --priority=default mirrors https://pypi.tuna.tsinghua.edu.cn/s
 ### 虚拟环境
 
 ```shell
+poetry env info --path
+# 你可以通过以下命令来查看当前项目的虚拟环境路径：
 
 # 配置虚拟环境生成在项目文件中
 poetry config virtualenvs.in-project true
