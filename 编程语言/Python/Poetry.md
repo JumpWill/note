@@ -55,6 +55,11 @@ poetry shell
 poetry add package-name
 # 删除
 poetry remove package-name
+
+# 配置虚拟环境生成在项目文件中
+poetry config virtualenvs.in-project true
+poetry source add --priority=primary mirrors https://pypi.tuna.tsinghua.edu.cn/simple/
+poetry install
 ```
 
 ### run

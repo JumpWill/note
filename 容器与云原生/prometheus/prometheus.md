@@ -245,3 +245,66 @@ expr：基于PromQL表达式告警触发条件，用于计算是否有时间序�
 for：评估等待时间，可选参数。用于表示只有当触发条件持续一段时间后才发送告警。在等待期间新产生告警的状态为pending。
 labels：自定义标签，允许用户指定要附加到告警上的一组附加标签。
 annotations：用于指定一组附加信息，比如用于描述告警详细信息的文字等，annotations的内容在告警产生时会一同作为参数发送到Alertmanager。
+
+
+
+### 配置
+
+```yaml
+# 全局配置
+global:
+  # 采集数据的时间间隔
+  scrape_interval: 15s
+  # 评估告警规则的时间间隔
+  evaluation_interval: 15s
+# 采集配置
+scrape_configs:
+  # 采集目标
+  - job_name: 'prometheus'
+    static_configs:
+      # 采集目标地址
+      - targets: ['localhost:9090']
+
+  # k8s集群
+  - job_name: 'kubernetes-nodes'
+    # 使用k8s的service发现
+    kubernetes_sd_configs:
+      - role: node
+    # 重新标记
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
+        target_label: instance_type
+      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
+        target_label: instance_type
+      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
+        target_label: instance_type
+
+  - job_name: 'kubernetes-node-cadvisor'
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
+        target_label: instance_type
+      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
+        target_label: instance_type
+      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
+        target_label: instance_type
+
+
+
+
+
+
+
+
+
+
+
+  
+        
+        
+# 告警配置
+alerting:
+  alert_re
+
+```
