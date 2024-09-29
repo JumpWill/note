@@ -100,6 +100,15 @@
         <img src="https://www.datocms-assets.com/2885/1676497447-vault-favicon-color.png?h=192&w=192" alt="icon" width="65" height="65" />
       <br>Vault
     </td>
+    </td>
+    <td align="center" width="96">
+        <img src="https://grafana.com/static/assets/img/fav32.png" alt="icon" width="65" height="65" />
+      <br>Grafana
+    </td>
+    <td align="center" width="96">
+        <img src="https://prometheus.io/assets/favicons/favicon.ico" alt="icon" width="65" height="65" />
+      <br>Prometheus
+    </td>
 </tr>
 
 <tr>
@@ -171,9 +180,12 @@
         <img src="https://www.cursor.com/favicon.ico" width="48" height="48" alt="Jamstack" />
       <br>Cursor
     </td>
-        <td align="center"  width="96">
+</tr>
+<tr>
+  <td align="center"  width="96">
         <img src="https://www.getoutline.com/favicon-32.png" width="48" height="48" alt="Jamstack" />
       <br>Outline
     </td>
 </tr>
+
 </table>
