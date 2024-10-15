@@ -121,3 +121,7 @@ RUN pip config set install.trusted-host mirrors.aliyun.com
 ```dockerfile
 COPY ./  /code
 ```
+
+
+## 容器访问宿主机的服务
+https://www.cnblogs.com/forlive/p/15989409.html
