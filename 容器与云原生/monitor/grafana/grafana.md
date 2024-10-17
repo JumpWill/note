@@ -119,3 +119,7 @@ token_url = https://your-oauth-provider.com/oauth/token
 api_url = https://your-oauth-provider.com/userinfo
 allowed_domains = yourdomain.com
 ```
+
+### dashboard
+
+grafana的云服务器面板id 8919

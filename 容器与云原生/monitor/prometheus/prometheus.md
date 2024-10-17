@@ -246,8 +246,6 @@ for：评估等待时间，可选参数。用于表示只有当触发条件持�
 labels：自定义标签，允许用户指定要附加到告警上的一组附加标签。
 annotations：用于指定一组附加信息，比如用于描述告警详细信息的文字等，annotations的内容在告警产生时会一同作为参数发送到Alertmanager。
 
-
-
 ### 配置
 
 ```yaml
@@ -257,54 +255,117 @@ global:
   scrape_interval: 15s
   # 评估告警规则的时间间隔
   evaluation_interval: 15s
-# 采集配置
-scrape_configs:
-  # 采集目标
-  - job_name: 'prometheus'
-    static_configs:
-      # 采集目标地址
-      - targets: ['localhost:9090']
-
-  # k8s集群
-  - job_name: 'kubernetes-nodes'
-    # 使用k8s的service发现
-    kubernetes_sd_configs:
-      - role: node
-    # 重新标记
-    relabel_configs:
-      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
-        target_label: instance_type
-      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
-        target_label: instance_type
-      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
-        target_label: instance_type
-
-  - job_name: 'kubernetes-node-cadvisor'
-    kubernetes_sd_configs:
-      - role: node
-    relabel_configs:
-      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
-        target_label: instance_type
-      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
-        target_label: instance_type
-      - source_labels: [__meta_kubernetes_node_label_beta_kubernetes_io_instance_type]
-        target_label: instance_type
 
 
-
-
-
-
-
-
-
-
-
-  
-        
-        
 # 告警配置
 alerting:
-  alert_re
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+```
+
+rule_files:
+
+```yaml
+groups:
+# - name: 策略容器监控告警
+#   # docker进程监控
+#   rules:
+#   # 容器停止运行告警
+#   - alert: 策略容器停止运行
+#     expr: absent(container_last_seen{name=~"strategy_.+"})
+#     for: 3m
+#     labels:
+#       level: critical
+#     annotations:
+#       description: "服务器 {{ $labels.IP }} 容器 {{ $labels.name }} 已经超过5分钟没有运行"
+
+#   # 容器重启次数过多告警
+#   - alert: 策略容器频繁重启
+#     expr: changes(container_start_time_seconds{name=~"strategy_.+"}[15m]) > 2
+#     for: 15m
+#     labels:
+#       level: warning
+#     annotations:
+#       description: "服务器 {{ $labels.IP }} 容器 {{ $labels.name }} 频繁重启"
+
+- name: 服务器监控告警
+  rules:
+  # CPU 使用率高告警
+  - alert: CPU负载过高
+    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 10m
+    labels:
+      level: warning
+    annotations:
+      description: "服务器 {{ $labels.IP }} 的 CPU 使用率在过去10分钟内超过80%"
+
+  # 内存使用率高告警
+  - alert: 内存使用率过高
+    expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 85
+    for: 3m
+    labels:
+      level: warning
+    annotations:
+      description: "服务器 {{ $labels.IP }} 的内存使用率在过去10分钟内超过85%"
+
+  # 磁盘空间不足告警
+  - alert: 磁盘空间不足
+    expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+    for: 5m
+    labels:
+      level: warning
+    annotations:
+      description: "服务器 {{ $labels.IP }} 的根分区可用空间少于10%"
+
+  # 高负载告警
+  - alert: 系统负载过高
+    expr: node_load1 > (count by(instance) (node_cpu_seconds_total{mode="idle"}) * 0.01)
+    for: 5m
+    labels:
+      level: warning
+    annotations:
+      description: "服务器 {{ $labels.IP }} 的1分钟平均负载超过CPU核心数的80%"
+
+  # 网络流量异常告警
+  - alert: 网络流量异常
+    expr: sum by (instance) (rate(node_network_receive_bytes_total[5m])) + sum by (instance) (rate(node_network_transmit_bytes_total[5m])) > 100 * 1024 * 1024
+    for: 5m
+    labels:
+      level: warning
+    annotations:
+      description: "服务器 {{ $labels.IP }} 的网络吞吐量在过去5分钟内超过100MB/s"
+
+  # 服务器重启告警
+  - alert: 服务器重启
+    expr: time() - node_boot_time_seconds < 300
+    labels:
+      level: warning
+    annotations:
+      description: "服务器 {{ $labels.IP }} 在过去5分钟内重启过"
+
+
+  - alert: 实例下线
+    expr: up == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      description: "实例 {{ $labels.instance }} 监控服务异常,已经下线超过1分钟"
+```
+
+### 热更新
+
+prometheus 支持热更新，只需要在配置文件中添加以下内容：
+
+```yaml
+  '--web.enable-lifecycle' # 允许热更新
+```
+
+```bash
+# 发送请求执行热更新
+curl -X POST http://localhost:9090/-/reload
 ```
