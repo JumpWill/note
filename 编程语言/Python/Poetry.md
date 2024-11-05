@@ -75,3 +75,9 @@ poetry run python3 xxx.py
 ```shell
 poetry add  httpx  --group test
 ```
+
+### 导出依赖
+
+```
+poetry export -f requirements.txt --output requirements.txt
+```
