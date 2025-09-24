@@ -22,7 +22,9 @@ show master status
 
 # 将binlog写入磁盘,确保之前的操作都已经写入binlog文件,同时结束这个文件写入，开启一个新的binlog文件的写入 
 flush logs;
+# 上面的命令在mysql的命令行中执行
 
+# 下面的命令在linux的命令行中执行
 # 将文件转换为可阅读的sql语句
 mysqlbinlog --no-defaults -vv --base64-output=decode-rows binlog.000001 > log.sql
 
