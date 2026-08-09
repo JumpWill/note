@@ -41,6 +41,12 @@
 | 16 | [16-Unsafe进阶与FFI.md](16-Unsafe进阶与FFI.md) | 裸指针 / repr / alloc / MaybeUninit / bindgen + rust_c_demo 实战 |
 | 17 | [17-Async运行时深入.md](17-Async运行时深入.md) | Future / Pin / Waker / 自定义 executor + tokio_app 实战 |
 
+### 面试篇
+
+| 章节 | 文件 | 内容 |
+| --- | --- | --- |
+| 18 | [18-面试题.md](18-面试题.md) | 13 类高频 Rust 面试题 + 代码答案 + 速查清单 |
+
 ## 多文件项目实战索引
 
 | 文件 | 项目 | 关键概念 |
