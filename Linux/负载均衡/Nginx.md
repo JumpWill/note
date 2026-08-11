@@ -1,0 +1,1258 @@
+# Nginx
+
+## 一、Nginx 概述
+
+### 什么是 Nginx
+
+**Nginx**:高性能的 HTTP / 反向代理 / 邮件代理 / TCP-UDP 代理服务器
+
+- Igor Sysoev 2004 年开源,Rambler 公司
+- BSD-like 协议,现由 F5 维护
+- 事件驱动 + 异步非阻塞 I/O
+- 占据 Web 服务器市场份额前列(Netcraft 常年第一)
+- 关键口号:**"高并发、低内存、稳如老狗"**
+
+### 核心组件
+
+| 组件                  | 说明                                |
+|-----------------------|-------------------------------------|
+| **Nginx Core**        | 进程管理、配置加载、事件循环         |
+| **http 模块**         | HTTP 协议解析、HTTP 请求处理         |
+| **stream 模块**       | TCP / UDP 代理(L4 转发)             |
+| **mail 模块**         | 邮件代理(SMTP/POP3/IMAP)           |
+| **event 模块**        | epoll / kqueue / select 事件驱动     |
+
+### Nginx vs 其他 Web 服务器
+
+| 维度        | Nginx              | Apache             | Lighttpd          |
+|-------------|--------------------|--------------------|-------------------|
+| 架构        | 事件驱动异步         | 进程/线程(MPM)      | 事件驱动           |
+| 并发        | **高**             | 中                  | 中                 |
+| 内存占用    | **低**             | 高                  | 低                 |
+| 配置        | 单一 nginx.conf    | .htaccess 分布式    | 单一文件           |
+| 适用        | 反代、网关、静态     | 传统动态站点         | 轻量静态           |
+| 模块        | 静态/动态编译        | DSO 动态加载        | 静态编译            |
+
+---
+
+## 二、架构与运行机制
+
+### 1. 进程模型
+
+```text
+Master 进程
+├── Worker 1 (事件循环)
+├── Worker 2 (事件循环)
+├── Worker 3 (事件循环)
+└── ...
+```
+
+- **Master**:管理 Worker,不处理请求
+- **Worker**:每个 Worker 一个事件循环,处理请求
+- **Worker 数**:`worker_processes auto` (一般等于 CPU 核数)
+- **请求分发**:每个请求只在一个 Worker 中处理(accept_mutex 串行化)
+- **缓存加载器**:启动时一次性加载磁盘缓存到内存
+
+### 2. 事件循环
+
+**Nginx 的"高并发"= 事件驱动 + 异步 I/O**
+
+- 一个 Worker 可处理上万连接
+- 基于 epoll(Linux)/ kqueue(BSD)/ select
+- I/O 阻塞事件 → 注册回调 → 事件就绪 → 回调执行
+
+```text
+请求 1 ──┐
+请求 2 ──┤── 共用一个 Worker,通过事件循环分发
+请求 3 ──┘
+```
+
+### 3. 内存模型
+
+**Worker 间部分共享,部分独立**:
+
+- **共享内存** (shared memory zones):基于共享内存的 K/V / 缓存 / 计数器
+- **进程独立**:每个 Worker 自己的连接池、内存池
+
+---
+
+## 三、模块体系
+
+### 1. 模块分类
+
+```text
+Nginx 模块
+├── Core (核心)         # events, error_log, worker_processes
+├── HTTP                # http, server, location, proxy_pass
+├── Stream              # stream, upstream (L4)
+├── Mail                # mail 块
+└── Third-Party         # 第三方:模块编译或 dynamic module
+```
+
+### 2. HTTP 子模块分类
+
+```text
+http 模块
+├── handlers        # 处理请求(rewrite, return, proxy_pass)
+├── filters         # 过滤响应(gzip, sub_filter)
+├── upstream        # 负载均衡(round-robin, least_conn)
+├── load-balancer   # 调度
+└── access          # limit_req, limit_conn
+```
+
+### 3. 模块编译
+
+**静态编译**(传统):
+
+```bash
+./configure --prefix=/usr/local/nginx \
+    --with-http_stub_status_module \
+    --with-http_ssl_module \
+    --with-http_v2_module
+make && make install
+```
+
+**动态加载**(Nginx 1.9.11+,推荐):
+
+```bash
+./configure --with-compat --add-dynamic-module=../module-src
+# nginx.conf 中加载
+load_module modules/ngx_http_mod_module.so;
+```
+
+---
+
+## 四、请求处理阶段 (Phases)
+
+### 1. 阶段总览
+
+```text
+请求进入
+   │
+   ▼
+┌──────────────────────┐
+│ POST_READ            │  realip / limit_req
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ SERVER_REWRITE       │  rewrite(在 server 块)
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ FIND_CONFIG          │  location 匹配
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ REWRITE              │  rewrite(在 location 块)
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ POST_REWRITE         │
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ PREACCESS            │  limit_conn / auth_basic
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ ACCESS               │  allow / deny / auth_request
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ POST_ACCESS          │
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ PRECONTENT           │  try_files / mirror
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ CONTENT              │  proxy_pass / content_by_lua
+└──────────────────────┘
+   ▼
+┌──────────────────────┐
+│ LOG                  │  log_format / access_log
+└──────────────────────┘
+```
+
+### 2. 阶段详解
+
+| 阶段                | 时机                | 常用模块 / 指令            |
+|---------------------|---------------------|----------------------------|
+| **POST_READ**       | 收到请求首行         | `realip_module`, `limit_req` |
+| **SERVER_REWRITE**  | server 块重写       | `rewrite`, `set`           |
+| **FIND_CONFIG**     | 匹配 location       | (系统内部)                  |
+| **REWRITE**         | location 块重写     | `rewrite`, `set`           |
+| **PREACCESS**       | 访问前检查           | `limit_conn`, `limit_req`  |
+| **ACCESS**          | 访问控制             | `allow`, `deny`, `auth_basic` |
+| **PRECONTENT**      | 内容生成前           | `try_files`, `mirror`      |
+| **CONTENT**         | **生成内容主战场**   | `proxy_pass`, `static`     |
+| **LOG**             | 日志阶段             | `access_log`, `log_format` |
+
+### 3. 阶段使用方式
+
+```nginx
+# 阶段对应模块:用对应模块的指令即在对应阶段生效
+server {
+    listen 80;
+
+    # SERVER_REWRITE 阶段
+    set $foo "bar";
+
+    # ACCESS 阶段
+    allow 192.168.1.0/24;
+    deny all;
+
+    location / {
+        # REWRITE 阶段
+        rewrite ^/old /new permanent;
+
+        # CONTENT 阶段
+        proxy_pass http://backend;
+    }
+}
+```
+
+---
+
+## 五、常用指令
+
+### 1. listen 与 server_name
+
+```nginx
+server {
+    listen 80;
+    listen 443 ssl http2;
+    server_name example.com www.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/example.crt;
+    ssl_certificate_key /etc/nginx/ssl/example.key;
+}
+```
+
+### 2. location 匹配
+
+| 前缀 | 含义 | 优先级 |
+| ---- | ---- | ---- |
+| `=` | 精确匹配 | 1(最高) |
+| `^~` | 前缀匹配,不再正则 | 2 |
+| `~` | 正则(区分大小写) | 3 |
+| `~*` | 正则(不区分大小写) | 3 |
+| 无 | 前缀匹配 | 4(最低) |
+
+```nginx
+location = /favicon.ico { ... }       # 精确
+location ^~ /static/ { ... }          # 前缀优先
+location ~ \.php$ { ... }             # 正则
+location /api/ { ... }                # 普通前缀
+```
+
+### 3. rewrite / return / try_files
+
+```nginx
+# rewrite 正则重写(返回码可选)
+rewrite ^/old/(.*)$ /new/$1 permanent;     # 301
+rewrite ^/api/(.*)$ /$1 break;             # break:不再走后续 rewrite
+
+# return 直接返回
+return 301 https://$host$request_uri;
+return 404;
+
+# try_files 兜底
+try_files $uri $uri/ /index.html;
+try_files $uri @fallback;                  # @ 命名 location
+```
+
+### 4. proxy_pass 与 upstream
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8080;
+    server 10.0.0.2:8080;
+    keepalive 32;
+}
+
+location / {
+    proxy_pass http://backend;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 60s;
+}
+```
+
+### 5. 变量
+
+```nginx
+$host              # Host 头(无端口)
+$server_name       # 匹配到的 server_name
+$request_uri       # 完整 URI(含参数)
+$uri               # 当前 URI(不含参数)
+$args              # 查询参数
+$arg_name          # ?name=xxx
+$http_header_name  # 请求头
+$remote_addr       # 客户端 IP
+$proxy_add_x_forwarded_for  # 拼接 X-Forwarded-For
+$upstream_addr     # upstream 实际地址
+$upstream_status   # upstream 状态码
+$upstream_response_time  # upstream 响应时间
+```
+
+---
+
+## 六、共享内存 (shared memory zones)
+
+### 1. 概述
+
+**共享内存区**:Worker 间共享的数据结构
+
+- 分配在共享内存
+- **所有 Worker 可见**
+- 用 `zone` 关键字指定
+- 适合缓存、限流、计数器
+
+### 2. 配置示例
+
+```nginx
+# 共享字典(类似 OpenResty 的 lua_shared_dict)
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m max_size=1g inactive=60m;
+
+# 限流区
+limit_req_zone $binary_remote_addr zone=rate_limit:10m rate=10r/s;
+
+# 连接限制区
+limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+```
+
+### 3. API
+
+```nginx
+# 共享内存不直接读写,通过模块 API:
+proxy_cache    my_cache          # 缓存
+limit_req      zone=rate_limit burst=20 nodelay;
+limit_conn     conn_limit 10;
+```
+
+### 4. 应用场景
+
+| 场景         | 做法                              |
+|--------------|-----------------------------------|
+| 反代缓存     | `proxy_cache_path`                |
+| 限流         | `limit_req_zone` + `limit_req`   |
+| 防并发连接   | `limit_conn_zone` + `limit_conn`  |
+| upstream 状态 | `zone` 关键字                     |
+| sticky cookie | `sticky` 指令                     |
+
+### 5. 限制
+
+- 总大小受限于 `worker_rlimit_nofile` 与物理内存
+- `keys_zone` 仅存索引,实际值存磁盘或内存池
+- 复杂数据需自定义模块
+
+---
+
+## 七、upstream 与负载均衡
+
+### 1. upstream 块
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8080 weight=3;
+    server 10.0.0.2:8080 weight=1;
+    server 10.0.0.3:8080 backup;          # 备用
+    server 10.0.0.4:8080 down;            # 摘除
+    keepalive 32;                          # 保持上游连接
+    keepalive_requests 100;
+    keepalive_timeout 60s;
+}
+```
+
+### 2. 调度算法
+
+```nginx
+# 默认 round-robin(加权)
+upstream a { server 10.0.0.1:8080; server 10.0.0.2:8080; }
+
+# least_conn
+upstream b { least_conn; server ...; }
+
+# ip_hash(同一 IP → 同一 upstream)
+upstream c { ip_hash; server ...; }
+
+# hash(指定 key 哈希,常用于缓存亲和)
+upstream d { hash $request_uri consistent; server ...; }
+
+# random(随机两台选响应最快的,商业版)
+upstream e { random two; server ...; }
+```
+
+### 3. 健康检查
+
+**被动**(默认,生产请求触发):
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8080 max_fails=3 fail_timeout=30s;
+    server 10.0.0.2:8080;
+}
+```
+
+**主动**(商业版 / nginx-plus;开源需 `nginx_upstream_check_module`):
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8080;
+    check interval=5000 rise=2 fall=3 timeout=1000 type=http;
+    check_http_send "GET /health HTTP/1.0\r\n\r\n";
+    check_http_expect_alive http_2xx;
+}
+```
+
+### 4. keepalive 连接池
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8080;
+    keepalive 32;                # 每个 Worker 保持 32 个到上游的长连接
+}
+
+location / {
+    proxy_pass http://backend;
+    proxy_http_version 1.1;      # 必须 HTTP/1.1
+    proxy_set_header Connection "";  # 关闭短连接头
+}
+```
+
+### 5. proxy_pass 关键点
+
+```nginx
+# 末尾 / 行为
+location /api/ { proxy_pass http://backend; }    # /api/foo → http://backend/foo
+location /api/ { proxy_pass http://backend/; }   # /api/foo → http://backend/foo
+location /api  { proxy_pass http://backend; }    # /api/foo → http://backend/api/foo
+```
+
+---
+
+## 八、子请求 (Subrequest)
+
+### 1. 内部子请求
+
+**子请求**:在不中断当前请求的前提下,内部触发其他 location 处理
+
+```nginx
+location /api/ {
+    # auth_request 触发子请求做鉴权
+    auth_request /auth;
+
+    # mirror 把请求镜像到其他 location(不影响主响应)
+    mirror /mirror;
+
+    proxy_pass http://backend;
+}
+
+location = /auth {
+    internal;                 # 仅内部可访问
+    proxy_pass http://auth-service/verify;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+}
+```
+
+### 2. subrequest 典型用法
+
+- **auth_request**:鉴权子请求
+- **mirror**:请求镜像(用于流量复制、灰度)
+- **error_page 触发**:错误页走子请求
+
+```nginx
+location / {
+    error_page 502 = @fallback;     # 502 时子请求到 fallback
+}
+
+location @fallback {
+    proxy_pass http://backup;
+}
+```
+
+### 3. 子请求 vs proxy_pass
+
+| 维度        | 子请求 (auth_request / mirror) | proxy_pass 真实转发     |
+|-------------|--------------------------------|--------------------------|
+| 配置        | 走 Nginx location             | 直接连后端                |
+| 性能        | 极快(共享内存)                | 一次完整 HTTP 调用        |
+| 失败影响    | 仅影响当前请求                 | 主响应                   |
+| 适用        | 鉴权、镜像、灰度               | 正常业务转发              |
+
+---
+
+## 九、健康检查与重试
+
+### 1. 健康检查
+
+详见 §七.3。
+
+### 2. proxy_next_upstream 重试
+
+```nginx
+location / {
+    proxy_pass http://backend;
+    proxy_next_upstream error timeout http_502 http_503;
+    proxy_next_upstream_tries 3;
+    proxy_next_upstream_timeout 10s;
+}
+```
+
+`error / timeout / invalid_header / http_502 / http_503 / http_504 / http_403 / http_404 / http_429 / non_idempotent`
+
+### 3. resolver DNS 刷新
+
+```nginx
+location / {
+    resolver 10.0.0.1 valid=30s;       # DNS TTL
+    resolver_timeout 5s;
+    set $upstream http://dynamic-backend.example.com;
+    proxy_pass $upstream;
+}
+```
+
+---
+
+## 十、正则与变量
+
+### 1. location 正则
+
+```nginx
+location ~ \.php$ { ... }              # 正则,区分大小写
+location ~* \.(gif|jpg|png)$ { ... }   # 正则,不区分大小写
+location ~ ^/api/v(\d+)/(.*)$ { ... }  # 带捕获
+```
+
+### 2. rewrite 正则
+
+```nginx
+# 捕获组 + 重写
+rewrite ^/user/(\d+)/?$ /profile?id=$1 last;
+
+# 多捕获
+if ($http_user_agent ~ MSIE) {
+    rewrite ^ /old-browser.html last;
+}
+```
+
+### 3. if 指令(慎用)
+
+```nginx
+if ($args ~ "debug=1") {
+    set $debug 1;
+}
+
+if ($host = example.com) {
+    return 301 https://www.example.com$request_uri;
+}
+```
+
+**`if` 是邪恶的**(if is evil)——常见陷阱见 §十七。
+
+### 4. map 指令(推荐替代 if)
+
+```nginx
+http {
+    map $http_user_agent $is_mobile {
+        default 0;
+        ~*android|iphone 1;
+    }
+
+    server {
+        if ($is_mobile) {
+            rewrite ^ /mobile/ redirect;
+        }
+    }
+}
+```
+
+---
+
+## 十一、Nginx 模块开发 (C)
+
+### 1. 模块结构
+
+```c
+#include <ngx_config.h>
+#include <ngx_core.h>
+#include <ngx_http.h>
+
+static ngx_int_t ngx_http_hello_handler(ngx_http_request_t *r);
+static char *ngx_http_hello(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+
+static ngx_command_t ngx_http_hello_commands[] = {
+    {
+        ngx_string("hello"),
+        NGX_HTTP_LOC_CONF | NGX_CONF_NOARGS,
+        ngx_http_hello,
+        0,
+        0,
+        NULL
+    },
+    ngx_null_command
+};
+
+static ngx_http_module_t ngx_http_hello_module_ctx = {
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+};
+
+ngx_module_t ngx_http_hello_module = {
+    NGX_MODULE_V1,
+    &ngx_http_hello_module_ctx,
+    ngx_http_hello_commands,
+    NGX_HTTP_MODULE,
+    NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    NGX_MODULE_V1_PADDING
+};
+```
+
+### 2. handler 实现
+
+```c
+static ngx_int_t
+ngx_http_hello_handler(ngx_http_request_t *r)
+{
+    ngx_int_t    rc;
+    ngx_buf_t   *b;
+    ngx_chain_t  out;
+
+    r->headers_out.content_type.len = sizeof("text/plain") - 1;
+    r->headers_out.content_type.data = (u_char *) "text/plain";
+    r->headers_out.status = NGX_HTTP_OK;
+    r->headers_out.content_length_n = 5;
+
+    b = ngx_create_temp_buf(r->pool, 5);
+    ngx_memcpy(b->pos, "hello", 5);
+    b->last = b->pos + 5;
+
+    out.buf = b;
+    out.next = NULL;
+    rc = ngx_http_send_header(r);
+    return ngx_http_output_filter(r, &out);
+}
+```
+
+### 3. config 脚本
+
+```text
+# config
+ngx_addon_name=ngx_http_hello_module
+HTTP_MODULES="$HTTP_MODULES ngx_http_hello_module"
+NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_hello_module.c"
+```
+
+```bash
+./configure --add-module=../hello-module
+```
+
+### 4. 模块类型
+
+| 类型        | 触发时机        | 典型例子              |
+|-------------|-----------------|------------------------|
+| **handler** | 接收请求时       | proxy, static           |
+| **filter**  | 处理响应时       | gzip, sub_filter        |
+| **upstream** | 上游连接        | proxy, fastcgi          |
+| **load-balancer** | 选择上游   | round-robin, ip_hash    |
+| **access**  | 访问控制        | allow, deny             |
+
+---
+
+## 十二、常用模块
+
+| 模块                         | 用途                       | 是否内置 |
+|------------------------------|----------------------------|----------|
+| **ngx_http_stub_status_module** | 状态页(`/basic_status`)  | 需编译   |
+| **ngx_http_random_index_module** | 目录随机首页             | 需编译   |
+| **ngx_http_autoindex_module** | 目录列表                   | 需编译   |
+| **ngx_http_limit_req_module** | 限流(QPS)                  | 内置     |
+| **ngx_http_limit_conn_module** | 限连接数                   | 内置     |
+| **ngx_http_geo_module**     | IP / 变量映射               | 内置     |
+| **ngx_http_map_module**     | 变量计算                   | 内置     |
+| **ngx_http_sub_module**     | 响应体替换                 | 内置     |
+| **ngx_http_auth_basic_module** | Basic 鉴权               | 内置     |
+| **ngx_http_auth_request_module** | 子请求鉴权             | 需编译   |
+| **ngx_http_realip_module**  | 取真实 IP                   | 内置     |
+| **ngx_http_ssl_module**     | HTTPS                      | 需编译   |
+| **ngx_http_v2_module**      | HTTP/2                     | 需编译   |
+| **ngx_http_gzip_module**    | gzip 压缩                  | 内置     |
+| **ngx_http_gzip_static_module** | 预压缩文件              | 需编译   |
+| **ngx_http_proxy_module**   | 反向代理                   | 内置     |
+| **ngx_http_fastcgi_module** | FastCGI(PHP-FPM)          | 内置     |
+| **ngx_http_uwsgi_module**   | uWSGI(Python)             | 内置     |
+| **ngx_http_grpc_module**    | gRPC 反代                  | 需编译   |
+| **ngx_http_dav_module**     | WebDAV                     | 需编译   |
+| **ngx_http_image_filter_module** | 图片处理              | 需编译   |
+| **nginx_upstream_check_module** | upstream 主动健康检查 | 第三方   |
+| **ngx_brotli**              | Brotli 压缩                | 第三方   |
+| **ModSecurity-nginx**       | WAF                        | 第三方   |
+
+---
+
+## 十三、缓存策略
+
+### 1. proxy_cache 配置
+
+```nginx
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m
+                 max_size=10g inactive=60m use_temp_path=off;
+
+server {
+    location / {
+        proxy_pass http://backend;
+        proxy_cache my_cache;
+        proxy_cache_key "$scheme$proxy_host$request_uri";
+        proxy_cache_valid 200 302 10m;
+        proxy_cache_valid 404      1m;
+        proxy_cache_min_uses 1;
+        proxy_cache_bypass $arg_nocache;
+        proxy_no_cache $arg_nocache;
+        add_header X-Cache-Status $upstream_cache_status;
+    }
+}
+```
+
+### 2. 多级缓存
+
+```text
+请求 → Nginx 进程内缓存 → proxy_cache(磁盘) → upstream
+```
+
+### 3. 缓存模式
+
+**被动缓存**(默认,首次回源后缓存):
+
+```nginx
+proxy_cache_valid 200 10m;
+```
+
+**主动预热**(启动时填充,可用 `proxy_cache_purge` 或 lua-nginx-module):
+
+```nginx
+proxy_cache_bypass $http_pragma;
+```
+
+### 4. 缓存击穿 / 雪崩
+
+```nginx
+# 加锁防止击穿
+proxy_cache_lock on;             # 同一 key 只有一个请求回源
+proxy_cache_lock_timeout 5s;
+
+# 防止雪崩:不同 key 错开过期
+proxy_cache_valid 200 10m;
+proxy_cache_valid 200 301 302 10m;
+proxy_cache_valid any 1m;
+```
+
+### 5. 缓存状态
+
+`$upstream_cache_status`:
+
+- `HIT` / `MISS` / `EXPIRED` / `STALE` / `UPDATING` / `REVALIDATED` / `BYPASS`
+
+---
+
+## 十四、性能优化
+
+### 1. 关键参数
+
+```nginx
+worker_processes auto;                 # CPU 核数
+worker_cpu_affinity auto;              # CPU 亲和
+worker_rlimit_nofile 65535;
+
+events {
+    worker_connections 65535;          # 每 Worker 最大连接
+    multi_accept on;                    # 一次 accept 多个连接
+    use epoll;                         # Linux 用 epoll
+}
+
+http {
+    sendfile on;                        # 零拷贝
+    tcp_nopush on;                      # 合并包
+    tcp_nodelay on;                     # 禁用 Nagle
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    open_file_cache max=1000 inactive=20s;
+    open_file_cache_valid 30s;
+    open_file_cache_min_uses 1;
+}
+```
+
+### 2. upstream keepalive
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8080;
+    keepalive 32;
+}
+
+location / {
+    proxy_pass http://backend;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+}
+```
+
+### 3. gzip 压缩
+
+```nginx
+gzip on;
+gzip_min_length 1k;
+gzip_comp_level 6;
+gzip_types text/plain text/css text/xml application/json application/javascript application/xml+rss image/svg+xml;
+gzip_vary on;
+gzip_proxied any;
+```
+
+### 4. buffer 调优
+
+```nginx
+proxy_buffering on;                  # 缓冲到磁盘
+proxy_buffer_size 4k;                # 响应头缓冲
+proxy_buffers 8 16k;                 # 响应体缓冲
+proxy_busy_buffers_size 32k;
+proxy_temp_file_write_size 64k;
+```
+
+### 5. 性能基准
+
+| 操作                          | 量级          |
+|-------------------------------|---------------|
+| 静态文件(零拷贝)              | ~100K QPS     |
+| 反代转发(keepalive)           | ~50K QPS      |
+| 反代转发(短连接)              | ~10K QPS      |
+| gzip 压缩                     | ~30K QPS      |
+| TLS 握手                      | ~5K QPS       |
+
+(数值随硬件不同)
+
+---
+
+## 十五、WAF / 网关层应用
+
+### 1. IP 黑名单(geo)
+
+```nginx
+geo $is_blacklist {
+    default 0;
+    10.0.0.0/8 1;
+    192.168.1.100 1;
+}
+
+server {
+    if ($is_blacklist) {
+        return 403;
+    }
+}
+```
+
+### 2. 限流
+
+```nginx
+limit_req_zone $binary_remote_addr zone=rate:10m rate=10r/s;
+
+server {
+    location /api/ {
+        limit_req zone=rate burst=20 nodelay;   # 突发 20 个,允许排队
+        limit_req_status 429;
+        proxy_pass http://backend;
+    }
+}
+```
+
+### 3. 并发连接限制
+
+```nginx
+limit_conn_zone $binary_remote_addr zone=conn:10m;
+
+server {
+    location / {
+        limit_conn conn 10;       # 单 IP 最多 10 连接
+    }
+}
+```
+
+### 4. 鉴权
+
+```nginx
+# Basic 鉴权
+location /admin/ {
+    auth_basic "Admin";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+}
+
+# 子请求鉴权
+location /api/ {
+    auth_request /auth;
+}
+
+location = /auth {
+    internal;
+    proxy_pass http://auth-service;
+}
+```
+
+### 5. 灰度发布
+
+```nginx
+map $cookie_uid $uid { default ""; }
+map $http_x_release $release { default "stable"; }
+
+upstream stable { server 10.0.0.1:8080; }
+upstream canary { server 10.0.0.2:8080; }
+
+server {
+    location / {
+        if ($release = "canary") {
+            proxy_pass http://canary;
+        }
+        # 10% 流量到 canary(按 uid 末位)
+        if ($uid ~ "^[0-9]$") {
+            proxy_pass http://canary;
+        }
+        proxy_pass http://stable;
+    }
+}
+```
+
+### 6. 统一鉴权网关
+
+```nginx
+server {
+    listen 80;
+
+    location / {
+        access_by_lua_block {           # OpenResty 才支持
+            local token = ngx.var.arg_token
+            if not token then return ngx.exit(401) end
+            -- 验证 token
+        }
+    }
+}
+```
+
+(纯 Nginx 用 `auth_request` 子请求实现类似能力)
+
+---
+
+## 十六、调试与监控
+
+### 1. error_log
+
+```nginx
+error_log /var/log/nginx/error.log warn;     # 级别:debug/info/notice/warn/error/crit/alert/emerg
+```
+
+### 2. access_log 自定义格式
+
+```nginx
+log_format main '$remote_addr - $remote_user [$time_local] '
+                '"$request" $status $body_bytes_sent '
+                '"$http_referer" "$http_user_agent" '
+                'rt=$request_time uct=$upstream_connect_time '
+                'urt=$upstream_response_time';
+
+access_log /var/log/nginx/access.log main;
+```
+
+### 3. 状态页
+
+```nginx
+location = /basic_status {
+    stub_status on;           # Nginx 1.x
+    # 或 vts 模块:更详细
+}
+```
+
+输出:
+
+```text
+Active connections: 2
+server accepts handled requests
+ 100 100 200
+Reading: 0 Writing: 1 Waiting: 1
+```
+
+### 4. 监控指标
+
+```text
+Active connections              # 当前活跃
+accepts / handled / requests    # 累计接受/处理/请求
+Reading / Writing / Waiting     # 读/写/等待连接
+```
+
+更详细可用 **nginx-module-vts**(响应 JSON / Prometheus)。
+
+### 5. 火焰图
+
+```bash
+# 使用 systemtap / perf 抓 CPU 采样
+perf record -F 99 -p $(pgrep -n nginx) -g -- sleep 30
+perf script | ./stackcollapse-perf.pl > out.folded
+./flamegraph.pl out.folded > nginx.svg
+```
+
+---
+
+## 十七、常见陷阱
+
+### 1. `if` 指令陷阱
+
+- **`if` 是邪恶的**(if is evil):在 location 中只对部分指令安全,做 request redirect / rewrite 之外的会出问题
+- 用 `try_files` / `map` / `return` 替代
+
+```nginx
+# ❌ 错:if + proxy_pass 的副作用
+if ($args = "debug") { proxy_pass http://debug_backend; }   # 不可靠
+
+# ✅ 用 map
+map $args $backend { default "prod"; ~*debug=1 "debug"; }
+```
+
+### 2. upstream keepalive 没生效
+
+```nginx
+# ❌ 没生效
+proxy_pass http://backend;
+upstream backend { keepalive 32; }
+
+# ✅ 必须 HTTP/1.1 + 清空 Connection 头
+proxy_pass http://backend;
+proxy_http_version 1.1;
+proxy_set_header Connection "";
+```
+
+### 3. proxy_pass 末尾 `/`
+
+```nginx
+location /api/ { proxy_pass http://backend; }    # 多带 /api 前缀
+location /api/ { proxy_pass http://backend/; }   # 正确
+```
+
+### 4. location 匹配优先级
+
+```nginx
+# = 精确 > ^~ 前缀 > ~ 正则 > 普通前缀
+location / { ... }                      # 最后匹配
+location ~ \.php$ { ... }               # 正则优先
+```
+
+### 5. reload 不生效
+
+```bash
+nginx -t           # 先测配置
+nginx -s reload    # 热加载
+# 配置问题 reload 会保留旧配置,不抛错
+```
+
+### 6. 共享内存爆掉
+
+```nginx
+# keys_zone 总大小 ≥ Worker 数 × 单 zone 大小
+proxy_cache_path ... keys_zone=cache:10m;
+# 10MB 共享内存,所有 Worker 共享
+```
+
+### 7. worker_connections 不够
+
+```nginx
+# 不是单连接 = worker_connections
+# 反代时一个客户端连接可能占 2 个 worker_connections(到客户端 + 到上游)
+events {
+    worker_connections 65535;   # 反代时按 4 倍峰值估算
+}
+```
+
+---
+
+## 十八、Nginx vs 其他网关
+
+| 维度          | Nginx             | HAProxy       | Envoy           | OpenResty / Kong | Caddy           |
+|---------------|-------------------|---------------|-----------------|-------------------|-----------------|
+| 语言          | C                 | C             | C++             | C + Lua           | Go              |
+| 性能          | **极高**          | **极高**      | 高              | 高                | 中              |
+| L4 / L7       | L7 强 / L4(stream)| L4 + L7 都强  | L4 + L7 都强    | L7 强             | L7              |
+| 配置          | 配置文件           | 单文件         | YAML / xDS      | 配置 + Lua        | Caddyfile       |
+| 动态配置      | 弱(reload)        | 中(Dataplane API)| 强(xDS 热更)| 强(Lua 热加载)  | 弱              |
+| 服务发现      | 弱                 | 弱            | **强**(EDS)     | 中                | 弱              |
+| 生态          | 中                 | 中            | **强**          | 强(OpenResty 生态)| 中             |
+| 适用          | 反代、网关、静态   | L4/L7 LB      | 服务网格        | 网关层编程        | 简单静态/HTTPS  |
+
+---
+
+## 十九、部署与运维
+
+### 1. 安装
+
+**apt / yum**:
+
+```bash
+apt install nginx
+yum install nginx
+systemctl enable --now nginx
+```
+
+**官方源**:
+
+```bash
+# Debian/Ubuntu
+wget https://nginx.org/keys/nginx_signing.key
+apt-key add nginx_signing.key
+echo "deb https://nginx.org/packages/debian bullseye nginx" > /etc/apt/sources.list.d/nginx.list
+apt update && apt install nginx
+```
+
+**源码编译**:
+
+```bash
+./configure --prefix=/usr/local/nginx \
+    --user=nginx --group=nginx \
+    --with-http_stub_status_module \
+    --with-http_ssl_module \
+    --with-http_v2_module \
+    --with-http_gzip_static_module \
+    --with-http_realip_module \
+    --add-module=../ngx_brotli
+make -j$(nproc) && make install
+```
+
+### 2. 目录结构
+
+```text
+/etc/nginx/
+├── nginx.conf           # 主配置
+├── conf.d/              # 自定义 server 块
+│   ├── default.conf
+│   └── sites/*.conf
+├── modules/             # 动态模块(.so)
+├── snippets/            # 可复用的片段
+└── ssl/                 # 证书
+
+/var/log/nginx/
+├── access.log
+└── error.log
+
+/var/cache/nginx/        # proxy_cache 目录
+/usr/share/nginx/html/   # 默认站点
+```
+
+### 3. nginx.conf 结构
+
+```nginx
+user                 nginx;
+worker_processes     auto;
+pid                  /var/run/nginx.pid;
+error_log            /var/log/nginx/error.log warn;
+
+events {
+    worker_connections 65535;
+    multi_accept on;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;
+    tcp_nopush    on;
+    keepalive_timeout 65;
+
+    log_format main '...';
+    access_log   /var/log/nginx/access.log main;
+
+    # 通用配置
+    gzip on;
+
+    # 站点
+    include /etc/nginx/conf.d/*.conf;
+}
+```
+
+### 4. 常用命令
+
+```bash
+# 测试配置
+nginx -t
+nginx -T              # 测试 + 打印完整配置
+
+# 启动 / 停止 / 重载
+nginx
+nginx -s stop         # 立即停止
+nginx -s quit         # 优雅退出
+nginx -s reload       # 热加载(配置)
+nginx -s reopen       # 重新打开日志
+
+# 看版本与编译参数
+nginx -v              # 版本
+nginx -V              # 版本 + 编译参数
+```
+
+### 5. systemd
+
+```bash
+systemctl status nginx
+systemctl reload nginx       # 等价 nginx -s reload
+journalctl -u nginx -f       # 日志
+```
+
+### 6. 平滑升级
+
+```bash
+# 1. 编译新版本到 /usr/local/nginx-new/
+# 2. mv /usr/local/nginx /usr/local/nginx-old
+# 3. mv /usr/local/nginx-new /usr/local/nginx
+# 4. nginx -t
+# 5. make upgrade           # 等价 kill -HUP
+```
+
+### 7. 日志切割
+
+```bash
+# logrotate /etc/logrotate.d/nginx
+/var/log/nginx/*.log {
+    daily
+    rotate 30
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        nginx -s reopen > /dev/null 2>&1 || true
+    endscript
+}
+```
+
+---
+
+## 二十、核心要点速记
+
+- **Nginx = 事件驱动 + 异步 I/O**,单 Worker 可处理上万连接
+- **Master / Worker 模型**:`worker_processes auto`,一般等于 CPU 核数
+- **Worker 独立**,共享内存靠 `proxy_cache_path` / `limit_req_zone` / `limit_conn_zone`
+- **HTTP 11 个阶段**,CONTENT 是生成内容主战场
+- **location 匹配优先级**:`=` > `^~` > `~` > 普通前缀
+- **`upstream` 调度**:round-robin / least_conn / ip_hash / hash
+- **`proxy_next_upstream`** 控制重试
+- **upstream keepalive 必须 `http_version 1.1 + Connection ""`**
+- **`proxy_pass` 末尾 `/`** 决定是否剥离 location 前缀
+- **`if is evil`**:用 `map` / `try_files` / `return` 替代
+- **`proxy_cache` 缓存击穿**:`proxy_cache_lock on` 只允许一个回源
+- **状态页**:`stub_status` 或 vts 模块
+- **日志**:自定义 `log_format`,带 `$request_time` `$upstream_response_time`
+- **性能优化**:sendfile / tcp_nopush / keepalive / gzip / open_file_cache
+- **TLS 1.3 + HTTP/2**:生产标配
+- **WAF / 网关**:限流(`limit_req`)、鉴权(`auth_request`)、灰度(`map`)
+- **常见陷阱**:if 副作用 / proxy_pass 末尾 / / keepalive 配错 / reload 不生效
+- **vts / prometheus exporter** 用于监控指标导出
+- **debug 日志**:临时改 `error_log /var/log/nginx/error.log debug;`,生产别开
+- **平滑升级**:编译新版本替换,`nginx -s reload` 不中断运行中的请求
+- **logrotate** + `nginx -s reopen` 切割日志
+- **Nginx 是 L7 反代 + L4 stream** 双能力,云原生时代仍是入口首选之一
