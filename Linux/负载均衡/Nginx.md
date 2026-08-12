@@ -836,7 +836,533 @@ proxy_temp_file_write_size 64k;
 
 ---
 
-## 十五、WAF / 网关层应用
+## 十五、配置优化(从各角度加速 Nginx)
+
+本章按"配置角度"系统化梳理 Nginx 加速与调优,涵盖 worker / event / listen / location / 反代 / 缓存 / 压缩 / SSL / 静态文件 / 日志 / 系统等 11 个维度。
+
+### 1. Worker 与 Event 调优
+
+```nginx
+worker_processes auto;                 # CPU 核数
+worker_cpu_affinity auto;              # 自动绑定
+worker_rlimit_nofile 65535;            # fd 上限
+
+events {
+    worker_connections 65535;                # 每 Worker 连接数
+    multi_accept on;                        # 一次 accept 多个连接
+    use epoll;                              # Linux 用 epoll
+    accept_mutex on;                        # 多 Worker 串行化 accept
+}
+```
+
+### 2. listen 套接字优化
+
+```nginx
+server {
+    listen 80 backlog=2048 reuseport;        # 多 worker 复用端口
+    listen 443 ssl default_server backlog=2048 reuseport;
+    deferred on;                            # 延迟 accept(待数据到达)
+}
+```
+
+- **`reuseport`**:Linux 3.9+ 多进程监听同一端口,**避免 accept 锁竞争**
+- **`backlog=N`**:内核连接队列长度(> net.core.somaxconn 时取较小)
+- **`deferred`**:accept 时内核先不唤醒,数据到达后再唤醒(适合空闲长连接)
+
+### 3. HTTP / HTTPS 优化
+
+```nginx
+http {
+    sendfile on;                            # 零拷贝
+    tcp_nopush on;                          # 合并 TCP 包
+    tcp_nodelay on;                         # 禁用 Nagle
+    keepalive_timeout 65;
+    keepalive_requests 1000;                # 单连接最大请求数
+
+    server_tokens off;                      # 隐藏版本号(安全 + 美观)
+
+    # HTTP/2
+    listen 443 ssl http2;
+    http2_max_field_size 16k;
+    http2_max_header_size 32k;
+    http2_body_preread_size 64k;
+
+    # HTTP/3 / QUIC(1.25+)
+    # listen 443 quic reuseport;
+    # add_header Alt-Svc 'h3=":443"; ma=86400';
+}
+```
+
+### 4. SSL / TLS 优化
+
+```nginx
+http {
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers c ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers on;
+
+    # SSL session 缓存(关键)
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets on;
+
+    # OCSP stapling(加速证书链验证)
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 8.8.8.8 1.1.1.1 valid=300s;
+    resolver_timeout 5s;
+
+    # 早期数据(0-RTT)
+    ssl_early_data on;
+
+    # HTTP/2 推送(谨慎用,有时反效果)
+    # http2_push_preload on;
+
+    # 握手加速
+    ssl_buffer_size 4k;                     # 大 TLS 记录 → 更快握手
+    ssl_handshake_timeout 10s;
+}
+```
+
+**关键**:
+
+- TLS 1.3 优先(1-RTT)
+- Session cache + tickets(0-RTT,安全场景慎用)
+- OCSP stapling 减少客户端验证
+- **复用会话后 TLS 握手降为 0-RTT**
+
+### 5. 静态资源优化
+
+```nginx
+server {
+    location /static/ {
+        alias /var/www/static/;
+
+        # 零拷贝 + 预读
+        sendfile on;
+        tcp_nopush on;
+        aio threads;                         # 异步 I/O
+
+        # 压缩
+        gzip on;
+        gzip_static on;                      # 优先返回预压缩 .gz
+        gzip_min_length 1k;
+        gzip_comp_level 6;
+        gzip_vary on;
+        gzip_types
+       text/plain " application/javascript " "image/svg+xml " "application/wasm";
+
+        # 浏览器缓存
+        expires 365d;
+        add_header Cache-Control "public, immutable, max-age=31536000";
+        add_header X-Content-Type-Options nosniff;
+
+        # 文件描述符缓存
+        open_file_cache max=10000 inactive=30s;
+        open_file_cache_valid 60s;
+        open_file_cache_min_uses 2;
+        open_file_cache_errors on;
+    }
+
+    # 大文件(视频 / 备份)单独配置
+    location /download/ {
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay off;                     # 大文件:关 Nagle
+        output_buffers 4 1m;                # 大 buffer
+    }
+}
+```
+
+### 6. 反代 / 上游优化
+
+```nginx
+upstream backend {
+    server 10.0.0.1:8080 max_fails=3 fail_timeout=30s;
+    server 10.0.0.2:8080;
+    keepalive 32;                            # 连接池
+    keepalive_requests 1000;
+    keepalive_timeout 60s;
+
+    # ip_hash(粘性会话)/ hash $request_uri(缓存亲和)
+}
+
+location / {
+    proxy_pass http://backend;
+
+    # 关键:HTTP/1.1 + 清空 Connection 头
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    # Buffer
+    proxy_buffering on;
+    proxy_buffer_size 16k;
+    proxy_buffers 8 32k;
+    proxy_busy_buffers_size 64k;
+
+    # 超时
+    proxy_connect_timeout 5s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+
+    # 重试
+    proxy_next_upstream error timeout http_502 http_503;
+    proxy_next_upstream_tries 3;
+    proxy_next_upstream_timeout 10s;
+
+    # 不要缓冲临时文件到磁盘
+    proxy_max_temp_file_size 0;
+
+    # 隐藏 upstream 响应头
+    proxy_hide_header X-Powered-By;
+    proxy_hide_header Server;
+}
+```
+
+### 7. 压缩优化
+
+```nginx
+http {
+    gzip on;
+    gzip_min_length 1024;                    # 小于 1KB 不压
+    gzip_comp_level 5;                       # 1-9,6 是性价比最优
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        application/json
+        application/javascript
+        application/xml+rss
+        application/atom+xml
+        image/svg+xml
+        application/wasm;
+
+    # 动态请求压缩
+    gzip_disable "msie6";                    # 旧 IE 不压
+
+    # Brotli 压缩(模块)
+    brotli on;
+    brotli_comp_level 5;
+    brotli_types text/plain text/css application/json application/javascript;
+}
+```
+
+### 8. 缓存优化(proxy_cache)
+
+```nginx
+http {
+    # 路径 + 索引
+    proxy_cache_path /var/cache/nginx
+        levels=1:2
+        keys_zone=my_cache:100m                # 100MB 元数据
+        max_size=10g                             # 10GB 数据上限
+        inactive=60m                            # 60 分钟未用淘汰
+        use_temp_path=off;
+
+    server {
+        location / {
+            proxy_pass http://backend;
+            proxy_cache my_cache;
+            proxy_cache_key "$scheme$proxy_host$request_uri";
+            proxy_cache_valid 200 302 10m;
+            proxy_cache_valid 404 1m;
+            proxy_cache_lock on;                # 防击穿
+            proxy_cache_lock_timeout 5s;
+            proxy_cache_min_uses 1;             # 1 次后开始缓存
+            proxy_cache_bypass $http_pragma $http_authorization;
+            proxy_no_cache $http_authorization; # 鉴权请求不缓存
+            add_header X-Cache-Status $upstream_cache_status;
+        }
+    }
+}
+```
+
+### 9. location 匹配优化
+
+```nginx
+server {
+    # ✅ 静态规则在前(精确 > 前缀 > 正则)
+    location = /favicon.ico {  ... }
+    location = /health { access /; }
+    location ^~ /static/ { ... }              # 前缀优先,避免正则扫描
+    location ~* \.(jpg|jpeg|png|css|js|gz)$ {
+        expires 365d;
+    }
+
+    # ✅ API 走前缀
+    location /api/ {
+        proxy_pass http://api_backend;
+    }
+
+    # ❌ 避免:正则里捕获太多
+    # location ~ ^/api/v(\d+)/(users|orders|products|...)/(\d+)$ {
+    #     proxy_pass http://api_backend/$1/$3;
+    # }
+    # 改用 map / try_files,正则只做兜底
+}
+```
+
+**关键**:精确匹配(`=`)是最快的;`^~` 前缀匹配比正则快;正则匹配(`~` / `~*`)最慢,放最后。
+
+### 10. if 指令优化
+
+```nginx
+# ❌ 错:用 if 做重写 / 反代
+server {
+    if ($request_method = POST) {
+        proxy_pass http://api_backend;        # 不可靠
+    }
+    if ($args = "debug=1") {
+        rewrite ^ /debug last;
+    }
+}
+
+# ✅ 用 map / return / try_files 替代
+http {
+    map $request_method $is_post {
+        default 0;
+        POST 1;
+    }
+    map $args $backend {
+        default "prod";
+        ~*debug=1 "debug";
+    }
+    server {
+        location / {
+            return 200 "OK";
+        }
+        location /api/ {
+            if ($backend = "debug") {
+                proxy_pass http://debug_backend;
+                break;
+            }
+            proxy_pass http://prod_backend;
+        }
+    }
+}
+```
+
+### 11. 系统级优化
+
+```bash
+# /etc/security/limits.conf
+* soft nofile 65535
+* hard nofile 65535
+* soft nproc 65535
+* hard nproc 65535
+
+# /etc/sysctl.conf
+fs.file-max = 2097152
+fs.nr_open = 2097152
+net.core.somaxconn = 4096
+net.core.netdev_max_backlog = 16384
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+
+# 网卡多队列(配合 RSS)
+ethtool -L eth0 combined 8
+echo f > /sys/class/net/eth0/queues/rx-0/rps_cpus
+
+# CPU 频率
+performance governor
+echo performance > /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+```
+
+### 12. 错误页与日志优化
+
+```nginx
+http {
+    # 自定义错误页(静态)
+    error_page 404 /404.html;
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html { internal; }
+
+    # 异步日志(1.25+)
+    log_format main escape=json '{...}';
+    access_log /var/log/nginx/access.log main buffer=32k flush=5s;
+
+    # 不记空请求
+    access_log off if=$log_disabled;       # 配合 map
+
+    # 错误日志降级
+    error_log /var/log/nginx/error.log warn;
+}
+```
+
+### 13. 限流与防护(性能影响)
+
+```nginx
+http {
+    limit_req_zone $binary_remote_addr zone=rate:10m rate=100r/s;
+    limit_conn_zone $binary_remote_addr zone=conn:10m;
+
+    server {
+        location /api/ {
+            limit_req zone=rate burst=200 nodelay;
+            limit_conn conn 50;
+        }
+    }
+}
+```
+
+**关键**:限流可减少后端压力,但本身也消耗 CPU / 内存(共享字典)。
+
+### 14. 实战:综合优化清单
+
+```nginx
+user www-data;
+worker_processes auto;
+worker_cpu_affinity auto;
+worker_rlimit_nofile 65535;
+
+events {
+    worker_connections 65535;
+    multi_accept on;
+    use epoll;
+    accept_mutex on;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    keepalive_requests 1000;
+    server_tokens off;
+
+    types_hash_max_size 2048;
+    server_names_hash_max_size 4096;
+
+    # 压缩
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript;
+    gzip_vary on;
+
+    # SSL
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers c HIGH:!aNULL:!MD5;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets on;
+
+    # 缓存
+    proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=cache:100m
+                     max_size=10g inactive=60m use_temp_path=off;
+
+    # 文件缓存
+    open_file_cache max=10000 inactive=30s;
+    open_file_cache_valid 60s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors on;
+
+    # 日志
+    log_format main '$remote_addr - $remote_user [$time_local] '
+                    '"$request" $status $body_bytes_sent '
+                    '"$http_referer" "$http_user_agent" '
+                    'rt=$request_time uct=$upstream_connect_time '
+                    'urt=$upstream_response_time';
+    access_log /var/log/nginx/access.log main buffer=32k flush=5s;
+
+    # 服务
+    server {
+        listen 80 default_server;
+        listen 443 ssl http2 default_server backlog=2048 reuseport;
+        server_name _;
+
+        # SSL
+        ssl_certificate     /etc/nginx/ssl/cert.pem;
+        ssl_certificate_key /etc/nginx/ssl/key.pem;
+
+        # 压缩
+        gzip_static on;
+
+        # 安全头
+        add_header X-Frame-Options SAMEORIGIN;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-XSS-Protection "1; mode=block";
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+        # 静态资源
+        location ^~ /static/ {
+            alias /var/www/static/;
+            expires 365d;
+            add_header Cache-Control "public, immutable";
+            access_log off;
+        }
+
+        # API
+        location /api/ {
+            proxy_pass http://api_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+            proxy_buffering on;
+            proxy_buffer_size 16k;
+            proxy_buffers 8 32k;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 60s;
+
+            # 缓存
+            proxy_cache cache;
+            proxy_cache_valid 200 10m;
+            proxy_cache_lock on;
+            add_header X-Cache-Status $upstream_cache_status;
+
+            # 限流
+            limit_req zone=rate burst=100 nodelay;
+        }
+
+        # 兜底
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+
+    upstream api_backend {
+        server 10.0.0.1:8080 max_fails=3 fail_timeout=30s;
+        server 10.0.0.2:8080 max_fails=3 fail_timeout=30s;
+        keepalive 32;
+    }
+}
+```
+
+### 15. 性能基线与监控
+
+```bash
+# ab 压测
+ab -n 100000 -c 100 http://nginx/
+
+# wrk 压测
+wrk -t4 -c100 -d30s --latency http://nginx/
+
+# 监控
+stub_status on;             # Nginx 1.x
+vts 模块                   # 详细指标 + Prometheus
+```
+
+**对比基线**:
+
+| 优化点 | 性能提升 |
+| ------ | -------- |
+| sendfile | 20-50% |
+| gzip 压缩 | 30-70%(响应体传输) |
+| keepalive | 30-50%(反代) |
+| proxy_cache 命中 | 70-99% |
+| SSL session 复用 | 30-50%(TLS 握手) |
+| epoll vs select | 10x(高并发) |
+| reuseport | 20-40%(高并发 accept) |
+
+---
+
+## 十六、WAF / 网关层应用
 
 ### 1. IP 黑名单(geo)
 
