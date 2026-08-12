@@ -185,125 +185,587 @@ ipvsadm -A -t 192.168.1.100:80 -s sh
 | **Tunnel**   | TUN / IPIP | 高  | 极高 | RS 可跨网段 |
 | **FULLNAT**  | FNAT      | 高     | 高   | RS 任意网段 |
 
-### 2. NAT 模式
+---
+
+### 2. NAT 模式(改 IP,回程经 Director)
+
+#### 网络拓扑
 
 ```text
-client ─► Director ─► RS
-       (改 dst)     (回程经 Director)
-
-client_ip ───► Director ───► client_ip
-                              ↓ (改 src)
-                            RS sees: client_ip from Director_ip
-                              ↓
-                            RS ─► Director (改 src) ─► client
+公网段 / 客户端侧                内网段
+┌─────────────────┐        ┌──────────────────────────────┐
+│  client         │        │  Director                    │
+│  1.1.1.100      │──>──>──│  eth0: 1.1.1.1 (公网 / VIP) │
+│  MAC: AA:AA:AA  │        │  eth1: 10.0.0.254 (内网 GW)  │
+└─────────────────┘        └──────────────┬───────────────┘
+                                         │
+                          ┌──────────────┼──────────────┐
+                          ▼                              ▼
+                    ┌──────────┐                  ┌──────────┐
+                    │ RS-1     │                  │ RS-2     │
+                    │ 10.0.0.1 │                  │ 10.0.0.2 │
+                    └──────────┘                  └──────────┘
+                    (gateway = 10.0.0.254 = Director)
 ```
+
+- 客户端访问 `VIP:80`(真实是 Director 的 eth0 = 1.1.1.1)
+- RS 在内网,网关必须设为 Director(`10.0.0.254`)
+- Director **双向 NAT**:进站改 dst,出站改 src
+
+#### 入站数据包(逐字段变化)
+
+```text
+① 客户发出
+   src MAC: AA:AA:AA                  (client 网卡)
+   dst MAC: BB:BB:BB                  (Director eth0 MAC,由 ARP 得)
+   src IP:  1.1.1.100                 (client 公网 IP)
+   dst IP:  1.1.1.1                   (Director VIP / 80)
+   src Port: 50000
+   dst Port: 80
+
+② Director 接收(网卡层)
+   ✓ dst MAC 是自己,接收
+   ✓ IP 层收到,进入 netfilter / ip_vs hook
+   ✓ conntrack 创建新条目:
+     proto=tcp  state=SYN
+     tuple: (1.1.1.100:50000) ↔ (1.1.1.1:80)
+     reply tuple: (10.0.0.1:80) ↔ (1.1.1.100:50000)
+     ※ ip_vs 已选定 RS-1(10.0.0.1),把 NAT 信息记入 conntrack
+
+③ Director 转发(改 dst IP)
+   src MAC: BB:BB:BB                  (Director eth1 MAC)
+   dst MAC: CC:CC:CC                  (RS-1 eth0 MAC,ARP 缓存)
+   src IP:  1.1.1.100                 (不变 — 不替换 src,NAT 模式不改 src)
+   dst IP:  10.0.0.1                  (改! 原本 1.1.1.1 → 10.0.0.1)
+   src Port: 50000
+   dst Port: 80
+   ※ NAT 模式关键:dst IP 从 VIP(1.1.1.1)变成 RS IP(10.0.0.1)
+   ※ src IP 不变,RS 看到的是真实 client IP
+
+④ RS-1 接收
+   ✓ dst MAC 是自己,接收
+   ✓ dst IP 是 10.0.0.1(自己),接受
+   ✓ RS 看到:client = 1.1.1.100(真实)
+   ✓ RS 回包:
+     src IP:  10.0.0.1
+     dst IP:  1.1.1.100
+     ※ 回包目标 client,网关是 10.0.0.254 → 必须经 Director
+
+⑤ RS-1 回包经过 Director
+   ※ RS 默认网关是 10.0.0.254(Director)
+   src MAC: DD:DD:DD                  (RS-1 eth0)
+   dst MAC: EE:EE:EE                  (Director eth1)
+   src IP:  10.0.0.1
+   dst IP:  1.1.1.100
+   ※ Director 收到后,根据 conntrack 反向 NAT:
+     src IP:  10.0.0.1 → 1.1.1.1
+     (改 src IP = VIP,客户端以为是 VIP 回的)
+
+⑥ Director 发出
+   src MAC: BB:BB:BB                  (Director eth0)
+   dst MAC: AA:AA:AA                  (client MAC)
+   src IP:  1.1.1.1                   (改! 10.0.0.1 → 1.1.1.1 = VIP)
+   dst IP:  1.1.1.100
+
+⑦ client 收到
+   ✓ 看到 src IP = 1.1.1.1(VIP),符合预期
+```
+
+#### conntrack 条目
+
+```text
+nf_conntrack:
+  tuple_original: proto=TCP src=1.1.1.100:50000 dst=1.1.1.1:80
+  tuple_reply:    proto=TCP src=10.0.0.1:80   dst=1.1.1.100:50000
+  master: 已绑定到 ip_vs virtual service
+```
+
+#### 瓶颈与限制
+
+- **Director 是双向流必经之路**:进出都过 Director → Director 是瓶颈
+- **Director 出站带宽 = 入站带宽**(回程也过 Director)
+- **RS 必须把网关设为 Director**(否则回程路由不通)
+- **进出都跨网段**:从公网到内网再回公网,**两次跨网**
+
+#### 配置
 
 ```bash
 # Director
-ipvsadm -A -t 192.168.1.100:80 -s wrr
-ipvsadm -a -t 192.168.1.100:80 -r 10.0.0.1:80 -m   # -m = MASQ
-ipvsadm -a -t 192.168.1.100:80 -r 10.0.0.2:80 -m
-
-# 开启转发
 sysctl -w net.ipv4.ip_forward=1
+ipvsadm -A -t 1.1.1.1:80 -s wrr
+ipvsadm -a -t 1.1.1.1:80 -r 10.0.0.1:80 -m   # -m = MASQ(NAT)
+ipvsadm -a -t 1.1.1.1:80 -r 10.0.0.2:80 -m
 
-# RS 上把 Director IP 设为默认网关
+# RS
+ip route add default via 10.0.0.254 dev eth0   # 关键:网关是 Director
 ```
 
-**特点**:RS 看请求包源 IP 是真实 client(可选 `-m` 替换 / 不替换)
+#### 优缺点
 
-### 3. DR 模式(Direct Routing,最常用)
+| 优点 | 缺点 |
+| ---- | ---- |
+| 配置简单(Director 改 IP,RS 改网关) | Director 是瓶颈(双向流量) |
+| RS 不需要特殊配置(关闭 ARP 等) | RS 必须在同一 L3 网段 |
+| RS 看真实 client IP | 带宽放大问题(进出 2x) |
+
+---
+
+### 3. DR 模式(改 MAC,回程不经 Director,生产最常用)
+
+#### 网络拓扑
 
 ```text
-client ─► Director ─► RS
-              │
-              └───► RS 直接回 client(不经过 Director)
-
-client_ip ───► Director ───► client_ip
-                              ↓
-                            RS 接收(Director MAC + Director IP)
-                            RS 改 src MAC = RS, dst MAC = client
-                            client 直接收到 RS 的包
+同一 L2 网段(关键!)
+┌─────────────────┐
+│  client         │
+│  1.1.1.100      │──>──>──>──>──>──>─┐
+│  MAC: AA:AA:AA  │                   │
+└─────────────────┘                   ▼
+                              ┌──────────────┐
+                              │ Director     │
+                              │ IP: 1.1.1.1  │
+                              │ VIP: 1.1.1.1 │
+                              │ MAC: BB:BB   │
+                              └──────┬───────┘
+                                     │ 改 MAC 转发
+                       ┌─────────────┴─────────────┐
+                       ▼                           ▼
+                ┌──────────┐               ┌──────────┐
+                │ RS-1     │               │ RS-2     │
+                │ IP: 1.0.0.11│             │ IP: 1.0.0.12│
+                │ VIP/lo: 1.1.1.1│           │ VIP/lo: 1.1.1.1│
+                │ (lo 上配 VIP,|             │ (lo 上配 VIP,│
+                │  不响应 ARP)│             │  不响应 ARP)│
+                │ MAC: CC:CC │               │ MAC: DD:DD │
+                └─────┬──────┘               └─────┬──────┘
+                      │  回包(直接到 client,不经 Director)
+                      └──────────┬─────────┘
+                                 ▼
+                              client (1.1.1.100)
 ```
 
-**Director 流程**:
+#### 核心思想
 
-1. 收到 client 包(MAC = Director IP,VIP)
-2. ip_vs 改 dst MAC = RS, dst IP 不变(VIP)
-3. 包从 Director 发出,到达 RS
+```text
+✦ Director 只改 dst MAC,不动 IP
+✦ dst IP 始终是 VIP(1.1.1.1)
+✦ RS 在 lo 上配置 VIP,收到 dst=VIP 的包
+✦ RS 回包时 src IP = VIP,直接给 client(不经 Director)
+```
 
-**RS 流程**:
+#### 入站数据包(逐字段变化)
 
-1. 接收包(MAC = 自己)
-2. 看到 dst IP = VIP,本机 lo 配置了 VIP,接受
-3. RS 直接回包给 client(src IP = VIP)
+```text
+① 客户发出
+   src MAC: AA:AA:AA                  (client)
+   dst MAC: BB:BB:BB                  (Director,ARP → 谁持有 VIP 谁回应)
+   src IP:  1.1.1.100
+   dst IP:  1.1.1.1                   (VIP)
+   src Port: 50000
+   dst Port: 80
+
+   ※ 谁持有 VIP 回应 ARP?
+     - Director 在 eth0 上配 VIP,所以 ARP 回应是 Director
+     - RS 在 lo 上配 VIP,但抑制 ARP,不应答
+     - 结果:dst MAC = Director
+
+② Director 接收
+   ✓ dst MAC 是自己,接收
+   ✓ ip_vs hook 选定 RS-1
+   ★ 只改 MAC,不改 IP:
+   src MAC: BB:BB:BB                  (Director eth0)
+   dst MAC: CC:CC:CC                  (RS-1,关键!)
+   src IP:  1.1.1.100                 (不变)
+   dst IP:  1.1.1.1                   (不变,仍是 VIP)
+   src Port: 50000
+   dst Port: 80
+
+   ※ DR 关键:dst MAC 从 BB 改成 CC,dst IP 永远是 1.1.1.1
+
+③ RS-1 接收
+   ✓ dst MAC 是自己,接收
+   ✓ dst IP = 1.1.1.1
+     - 自己 lo 接口配置了 1.1.1.1
+     - 接收 → 由 lo 接口处理
+   ※ RS 看真实 client IP:src IP = 1.1.1.100
+
+④ RS-1 处理并回包
+   ※ RS 直接给 client(无需 Director)
+   src MAC: CC:CC:CC                  (RS-1 eth0)
+   dst MAC: AA:AA:AA                  (client MAC,ARP 缓存)
+   src IP:  1.1.1.1                   (回包 src = VIP)
+   dst IP:  1.1.1.100
+   src Port: 80
+   dst Port: 50000
+
+⑤ client 收到
+   ✓ src IP = 1.1.1.1(VIP),符合预期
+   ✓ src MAC = CC:CC:CC(RS-1),正常
+   ✦ 整个回程完全不经 Director
+```
+
+#### conntrack 条目
+
+```text
+nf_conntrack:
+  tuple_original: proto=TCP src=1.1.1.100:50000 dst=1.1.1.1:80
+  tuple_reply:    proto=TCP src=1.1.1.1:80      dst=1.1.1.100:50000
+  ※ 注意 reply tuple 的 src = VIP(因为 RS 回包 src 是 VIP)
+  ※ conntrack 状态会跟踪,但 Director 出站不查 conntrack
+    (Director 转发只改 MAC,内核允许)
+```
+
+#### 为什么 Director 不是瓶颈
+
+```text
+DR 模式:
+  - 入站:client → Director → RS(包改 MAC,走一次 Director)
+  - 回站:RS → client(直接走 RS → client,不经过 Director)
+
+NAT 模式:
+  - 入站:client → Director → RS(改 IP,Director 处理)
+  - 回站:RS → Director → client(Director 改 src IP,反向 NAT)
+
+DR 的 Director 只处理入站流量,回程零开销
+NAT 的 Director 进出都处理,带宽放大 2x
+```
+
+#### 为什么 Director 与 RS 必须在同一 L2
+
+```text
+DR 模式只改 MAC,不改 IP:
+  - 包从 Director eth0 出,dst MAC = RS
+  - 交换机查 MAC 表,二层转发到 RS
+  - RS 必须与 Director 在同一二层广播域
+  - 跨网段(路由器)就转发不到
+```
+
+#### 为什么 RS 在 lo 上配 VIP
+
+```text
+RS 收到的包 dst IP = VIP(1.1.1.1)
+  - 如果 RS 自己的 IP 中没有 1.1.1.1,会被丢弃(找不到路由接收方)
+  - 把 VIP 配在 lo 接口 → RS 的本地路由包含 1.1.1.1 → 接收
+  - 但 lo 配置 VIP 必须配 lo,不配 eth0(否则 ARP 冲突)
+```
+
+#### 为什么必须抑制 ARP
+
+```text
+问题:
+  - 如果 RS 在 eth0 配 VIP,会响应 ARP(谁持有 VIP 谁能 ARP 回应)
+  - 那 client 首次 ARP 时会直接拿到 RS 的 MAC
+  - 包根本到不了 Director → 调度失效
+
+解决:
+  - RS 上只把 VIP 配在 lo(loopback)
+  - 抑制 lo 回应 ARP(arp_ignore=1,arp_announce=2)
+  - 所有 ARP 回应走 eth0 上的真实 IP,而 eth0 不持有 VIP
+  - 只有 Director 的 eth0 持有 VIP → Director 抢到 ARP 回应
+```
+
+#### 配置
 
 ```bash
 # Director
-ipvsadm -A -t 192.168.1.100:80 -s wrr
-ipvsadm -a -t 192.168.1.100:80 -r 10.0.0.1:80 -g   # -g = DR
-ipvsadm -a -t 192.168.1.100:80 -r 10.0.0.2:80 -g
+ip addr add 1.1.1.1/32 dev eth0           # VIP 在物理网卡
+ipvsadm -A -t 1.1.1.1:80 -s wrr
+ipvsadm -a -t 1.1.1.1:80 -r 1.0.0.11:80 -g   # -g = Gateway(DR)
+ipvsadm -a -t 1.1.1.1:80 -r 1.0.0.12:80 -g
 
-# Director 上 VIP 配置在物理接口(eth0)
-ip addr add 192.168.1.100/32 dev eth0
-
-# RS 上配置
-# 1. lo 配置 VIP(不响应 ARP)
-ip addr add 192.168.1.100/32 dev lo
-# 2. 抑制 ARP 响应
-sysctl -w net.ipv4.conf.lo.arp_ignore=1
+# RS(每台)
+ip addr add 1.1.1.1/32 dev lo              # VIP 在 loopback
+sysctl -w net.ipv4.conf.lo.arp_ignore=1    # 不响应 lo 上的 ARP
 sysctl -w net.ipv4.conf.lo.arp_announce=2
 sysctl -w net.ipv4.conf.all.arp_ignore=1
 sysctl -w net.ipv4.conf.all.arp_announce=2
 ```
 
-**特点**:Director 只处理入站,RS 直接回 client → Director 不成为瓶颈
+#### 优缺点
 
-### 4. Tunnel 模式(IPIP)
+| 优点 | 缺点 |
+| ---- | ---- |
+| Director 不是瓶颈(回程不经过) | 必须同 L2 网段 |
+| RS 看真实 client IP | RS 需配置 ARP 抑制 + lo VIP |
+| 性能接近线速 | 跨网段不行 |
+| 配置一次,长期稳定 | Director RS 都要配 VIP |
+
+---
+
+### 4. Tunnel 模式(IPIP 隧道,跨网段)
+
+#### 网络拓扑
 
 ```text
-client ─► Director ─► RS (跨网段,IPIP 隧道)
-client ─► RS ─► client (RS 直接回)
+client                       Director                                 RS
+1.1.1.100                    1.1.1.1 / 10.0.0.1                     1.0.0.11 / 10.1.0.1
+  │                              │                                       │
+  └────────► VIP 1.1.1.1 ────►  │                                       │
+                                 │ IPIP 隧道(dst=10.1.0.1)              │
+                                 │  内层 dst=VIP(1.1.1.1)               │
+                                 │───────────────────────────────────► │
+                                 │                                       │
+                                 │   RS 解 IPIP 隧道,看到 dst=VIP        │
+                                 │   RS lo 上配 VIP,接收                 │
+                                 │                                       │
+                                 │◄──────────────────────────────────────│
+                                       (回包 src=VIP,直接给 client)
 ```
+
+#### 核心思想
+
+```text
+✦ Director 把原始 IP 包整体作为负载,外面再套一层 IPIP 头
+✦ 外层 dst IP = RS 的真实 IP(可跨网段)
+✦ 内层 dst IP = VIP
+✦ RS 解 IPIP 隧道,看到内层 dst=VIP,接受
+✦ RS 回包同样封装 IPIP,直接回 client(不经 Director)
+```
+
+#### 入站数据包(逐字段变化)
+
+```text
+① 客户发出(普通 IP 包)
+   外层 src IP: 1.1.1.100
+   外层 dst IP: 1.1.1.1
+   src Port: 50000
+   dst Port: 80
+   ... TCP payload ...
+
+② Director 接收
+   ✓ dst IP = VIP,ip_vs hook 选定 RS-1(10.1.0.1)
+   ★ 包一层 IPIP 头:
+   ┌────────────────────────────────────────┐
+   │ IPIP 隧道包:                           │
+   │   外层 src IP: 10.0.0.1   (Director)   │
+   │   外层 dst IP: 10.1.0.1   (RS-1 真实 IP)│
+   │   protocol: 4 (IP-in-IP)               │
+   │   ┌──────────────────────────────────┐ │
+   │   │ 内层(原始包):                   │ │
+   │   │   src IP: 1.1.1.100 (client)    │ │
+   │   │   dst IP: 1.1.1.1   (VIP)       │ │
+   │   │   src Port: 50000               │ │
+   │   │   dst Port: 80                  │ │
+   │   │   ... TCP ...                   │ │
+   │   └──────────────────────────────────┘ │
+   └────────────────────────────────────────┘
+
+   ※ IPIP 协议号 = 4
+   ※ 外层 20 字节 IP 头 + 内层原 IP 包
+
+③ 网络传输
+   路由器看外层 dst = 10.1.0.1,跨网段转发
+   最终到达 RS-1(10.1.0.1)
+
+④ RS-1 接收 + 解 IPIP
+   ✓ RS-1 内核收到协议号 4(IPIP)
+   ✓ ip_tunnel 模块解封装,剥离外层头
+   ✓ 看到内层 dst IP = 1.1.1.1(VIP)
+   ✓ 自己 lo 上配了 1.1.1.1,接收
+   ✓ RS 处理:看到 src IP = 1.1.1.100(真实 client)
+
+⑤ RS-1 回包(同样 IPIP 隧道)
+   ※ RS 也可以封装 IPIP 回包(主动回 client,但通常 RS 是直接回普通 IP)
+   ※ 更常见:RS 解隧道后,用 lo 接口(src=VIP)直接给 client 回普通包
+   src IP:  1.1.1.1
+   dst IP:  1.1.1.100
+   src Port: 80
+   dst Port: 50000
+
+⑥ client 收到
+   ✓ src IP = VIP,正常
+```
+
+#### 为什么可以跨网段
+
+```text
+DR 模式只改 MAC → 必须同 L2
+TUN 模式包一层 IP 头 → 路由器按外层 dst IP 转发 → 可跨网段(广域网)
+```
+
+#### 为什么 RS 需要 IPIP 模块
+
+```text
+RS 收到 protocol=4(IPIP)的包
+  - 内核必须识别 IPIP 协议
+  - 通过 modprobe ipip 加载 ip_tunnel 模块
+  - 隧道接口(tunl0)上配 VIP
+  - 内核自动解封装,内层包进入正常 TCP/IP 栈处理
+```
+
+#### 配置
 
 ```bash
 # Director
-ipvsadm -A -t 192.168.1.100:80 -s wrr
-ipvsadm -a -t 192.168.1.100:80 -r 10.0.1.1:80 -i   # -i = TUN
-
-# Director 需开启 IPIP
 modprobe ipip
+ipvsadm -A -t 1.1.1.1:80 -s wrr
+ipvsadm -a -t 1.1.1.1:80 -r 10.1.0.1:80 -i   # -i = TUN
 
-# RS 需开启 IPIP 接收 + 隧道配置
-ip tunnel add tunl0 mode ipip remote <director_ip> local <rs_ip>
-ip addr add 192.168.1.100/32 dev tunl0
+# RS
+modprobe ipip
+ip tunnel add tunl0 mode ipip local 10.1.0.1
+ip addr add 1.1.1.1/32 dev tunl0
+sysctl -w net.ipv4.conf.tunl0.arp_ignore=1
+sysctl -w net.ipv4.conf.tunl0.arp_announce=2
 ```
 
-**特点**:Director 与 RS 可跨网段(广域网),但 RS 需要公网 IP
+#### 优缺点
 
-### 5. FULLNAT 模式(阿里云)
+| 优点 | 缺点 |
+| ---- | ---- |
+| 可跨网段(广域网) | RS 必须支持 IPIP(几乎所有 Linux 都行) |
+| 回程不经 Director | 包头开销(+20 字节 IPIP) |
+| RS 看真实 client IP | 性能略低于 DR(封装解封装开销) |
+| 跨机房 / CDN 场景 | RS 需公网 IP(否则单向隧道不通) |
+
+---
+
+### 5. FULLNAT 模式(双向 NAT,跨网段,阿里云专利)
+
+#### 核心思想
 
 ```text
-client ─► Director (改 src + dst) ─► RS
-client 看到 src = Director
-RS 看到 src = Director(非 client)
+✦ NAT 模式只改 dst IP,src IP 不变
+✦ FULLNAT 同时改 src IP 和 dst IP
+   - src 改 → Director 内网 IP
+   - dst 改 → RS IP
+✦ RS 看到 src = Director(不是 client),实现 IP 隐藏
+✦ 双向 NAT 后,回程也必须经 Director(类似 NAT 模式)
+✦ 跨网段可用,VIP 不需配置在 RS
 ```
+
+#### 数据包变化
+
+```text
+① 客户发出
+   src IP: 1.1.1.100                 (client)
+   dst IP: 1.1.1.1                   (VIP)
+   src Port: 50000
+   dst Port: 80
+
+② Director 接收
+   ✓ ip_vs hook 选定 RS-1(10.0.0.1)
+   ★ 双向 NAT:
+   src IP:  1.1.1.1                  (改! Director 出口 IP,代替 client)
+   dst IP:  10.0.0.1                 (改! 选中的 RS)
+   src Port: 50000
+   dst Port: 80
+   ※ src IP 改成 Director 自己,而不是保留 client
+
+③ RS-1 接收
+   ✓ 看到 src = 1.1.1.1(Director),不是真实 client
+   ✓ RS-1 处理,回包 src=10.0.0.1 → dst=1.1.1.1
+
+④ Director 收 RS 回包
+   ★ 反向 NAT(查 conntrack):
+   src IP:  10.0.0.1                 (改! 1.0.0.1 → 1.1.1.1)
+   dst IP:  1.1.1.100                (改! Director 内网 IP → client)
+   ※ 把 Director 出口 IP 还原成真实 client IP
+   ※ 把 RS IP 还原成 VIP
+
+⑤ client 收到
+   ✓ src IP = 1.1.1.1(VIP),正常
+```
+
+#### conntrack 条目
+
+```text
+nf_conntrack:
+  tuple_original: proto=TCP src=1.1.1.100:50000 dst=1.1.1.1:80
+  tuple_reply:    proto=TCP src=10.0.0.1:80      dst=1.1.1.1:50000
+  ※ 注意 reply tuple 的 dst = Director 内网 IP
+  ※ FULLNAT 内核模块自己维护这张表的反向映射
+```
+
+#### vs NAT 模式
+
+| 维度 | NAT | FULLNAT |
+| ---- | --- | ------- |
+| src IP 改不改 | **不改**(RS 见真实 client) | **改**(RS 见 Director) |
+| dst IP 改不改 | 改(VIP → RS) | 改(VIP → RS) |
+| RS 配置 | 改网关为 Director | 无特殊要求 |
+| RS 网段要求 | 必须同网段 | **可任意网段** |
+| VIP 配置 | Director + RS 都要 | **仅 Director** |
+| 性能 | 中 | 中(略低于 NAT) |
+| 实现 | 标准内核 | 需要内核 patch(阿里云有) |
+
+#### 优缺点
+
+| 优点 | 缺点 |
+| ---- | ---- |
+| RS 不需要特殊配置 | 内核需 patch(标准内核无) |
+| 可跨网段(RS 任意位置) | RS 看不到真实 client IP |
+| VIP 不需在 RS | Director 仍是回程瓶颈 |
+| 灵活部署(云环境常用) | 性能开销略大 |
+
+#### 命令
 
 ```bash
-# 需要内核 patch(标准内核无 FULLNAT)
+# 标准内核无 FULLNAT
 # 阿里云在 Linux 4.x 上有 ip_vs_fullnat 模块
-ipvsadm -a -t 192.168.1.100:80 -r 10.0.0.1:80 -b   # -b = FULLNAT
+ipvsadm -a -t 1.1.1.1:80 -r 10.0.0.1:80 -b   # -b = FULLNAT
+
+# 验证内核支持
+modinfo ip_vs_fullnat
 ```
 
-**特点**:RS 任意网段,不需 VIP,SNAT 网段不需一致(但回程问题需额外处理)
+---
 
-### 6. 模式对比
+### 6. 模式深度对比
+
+#### 数据包转换矩阵
 
 ```text
-NAT:   Director 改 src/dst,回程经 Director(压力)
-DR:    Director 改 dst MAC,回程不经 Director(高效,要求同网段)
-TUN:   Director 包 IP 隧道,RS 解隧道,跨网段
-FULLNAT: Director 双向 NAT,跨网段,RS 无限制
+┌─────────┬────────────────────┬────────────────────┬────────────────────┬────────────────────┐
+│         │       NAT          │        DR          │       TUN          │      FULLNAT       │
+├─────────┼────────────────────┼────────────────────┼────────────────────┼────────────────────┤
+│ 改 IP   │ 仅改 dst           │ 改 MAC(不改 IP)    │ 整个包套 IPIP 头   │ 改 src + dst       │
+│ 改 MAC  │ 不改               │ 改(关键!)          │ 不改(外层不改)    │ 不改                │
+│ RS 网段 │ 必须同网段          │ 必须同 L2          │ 可跨网段(广域网)  │ 任意网段            │
+│ RS 配置 │ 改网关为 Director  │ lo 配 VIP+抑制 ARP │ tunl0 配 VIP+IPIP │ 无特殊要求          │
+│ 回程经  │ 经 Director        │ 不经 Director      │ 不经 Director      │ 经 Director        │
+│ Director│                    │                    │                    │                    │
+│ src IP  │ 不改(RS 见真实)    │ 不改(RS 见真实)    │ 不改(RS 见真实)    │ 改(RS 见 Director) │
+│ 真实    │                    │                    │                    │                    │
+│ 性能    │ 中(双向 NAT)       │ **极高**(只改 MAC) | 高(IPIP 封装开销)  | 中(双向 NAT)       │
+│ VIP 配置│ Director + RS      │ Director + RS      │ Director + RS      │ 仅 Director        │
+│ 实现    │ 标准内核            │ 标准内核            │ 标准内核           | 内核 patch(阿里)   │
+└─────────┴────────────────────┴────────────────────┴────────────────────┴────────────────────┘
+```
+
+#### 拓扑对比
+
+```text
+NAT:
+  client ──> [Director: NAT] ──> RS
+              ←──────────────────
+              (双向流量都经 Director)
+
+DR:
+  client ──> [Director: 改 MAC] ──> RS
+              (回程不经 Director)
+
+TUN:
+  client ──> [Director: IPIP] ──> RS (跨网段)
+                          ←───────
+              (回程不经 Director)
+
+FULLNAT:
+  client ──> [Director: 双向 NAT] ──> RS (跨网段)
+              ←─────────────────────
+              (回程经 Director)
+```
+
+#### 选型决策树
+
+```text
+Q1: 同 L2 网段?
+   ├── 是 ──→ Q2: 需要 RS 见真实 IP?
+   │           ├── 是 ──→ DR(最常用)  ← 默认选
+   │           └── 否 ──→ NAT
+   └── 否 ──→ Q3: 内核支持 FULLNAT?
+               ├── 是 ──→ FULLNAT(云上首选)
+               └── 否 ──→ TUN(IPIP 隧道)
 ```
 
 ---

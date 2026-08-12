@@ -1232,7 +1232,224 @@ journalctl -u nginx -f       # 日志
 
 ---
 
-## 二十、核心要点速记
+## 二十、实战案例: 七层与四层转发透传真实客户端 IP
+
+场景:反代后,upstream 只能看到 Nginx IP(不是真实 client);要做访问日志、限流、地理识别、攻击溯源,需要**透传真实客户端 IP**。
+
+### 1. 七层(L7 HTTP)透传
+
+#### Nginx 端注入 + realip 模块
+
+```nginx
+http {
+    # 信任的代理段(根据实际网络)
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 192.168.0.0/16;
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from <cdn_ip>;            # CDN 段
+
+    real_ip_header    X-Forwarded-For;
+    real_ip_recursive on;                  # 多层代理时取最左侧
+
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://backend;
+
+            # 主动把真实 IP 写到请求头
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Host  $host;
+        }
+    }
+}
+```
+
+**关键点**:
+
+| 指令 | 含义 |
+| ---- | ---- |
+| `set_real_ip_from <cidr>` | 信任的代理 IP,**只有列出的段送的 XFF 才解析** |
+| `real_ip_header X-Forwarded-For` | 从哪个 header 取真实 IP |
+| `real_ip_recursive on` | 多层代理时递归取最左侧 |
+| `proxy_set_header X-Real-IP $remote_addr` | 额外注入,upstream 可直接读 |
+| `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` | **追加**到现有链尾,而不是覆盖 |
+
+**upstream 端读取**:
+
+```nginx
+# Tomcat server.xml
+<Valve className="org.apache.catalina.valves.RemoteIpValve" />
+
+# Spring Boot application.properties
+server.forward-headers-strategy=native
+
+# 自定义读取(Nginx 之外的 PHP / Python 等)
+String realIp = request.getHeader("X-Real-IP");
+String forwardedFor = request.getHeader("X-Forwarded-For");
+```
+
+### 2. 四层(L4 stream)透传
+
+L4 没有 HTTP header,要传真实 IP 必须用其他机制。
+
+#### 方式 A: PROXY protocol(推荐,主流方案)
+
+Nginx 给 upstream 发 PROXY 协议头,upstream 解析。
+
+```nginx
+stream {
+    upstream mysql {
+        server 10.0.0.11:3306;
+    }
+
+    server {
+        listen 3306;
+        proxy_pass mysql;
+        proxy_protocol on;              # Nginx ≥ 1.11.4
+    }
+}
+```
+
+握手时,Nginx 发送一行:`PROXY TCP4 <client_ip> <rs_ip> <client_port> <rs_port>\r\n`,upstream 解析后获得真实 IP。
+
+**upstream 启用 PROXY protocol**:
+
+- MySQL: 用 ProxySQL 解析,或 mysql-proxy-plugin
+- Redis 6+: 支持,启动时 `proxy_enabled yes`
+- HAProxy: `accept-proxy` 一行开启
+- 自研 TCP 服务:协议层读取第一行
+
+#### 方式 B: TPROXY(IP_TRANSPARENT,内核级)
+
+让 Nginx **用 client 的源 IP** 连接 upstream。
+
+```nginx
+stream {
+    upstream mysql {
+        server 10.0.0.11:3306;
+    }
+
+    server {
+        listen 3306;
+        proxy_pass mysql;
+        proxy_bind $remote_addr transparent;     # 用 client IP 作源
+    }
+}
+```
+
+```bash
+# Director 端:开启 IP_TRANSPARENT 权限
+setcap cap_net_bind_service,cap_net_admin+ep /usr/sbin/nginx
+
+# RS 端:Director 必须当网关(否则回程找不到 client)
+route add default gw <director_ip>
+
+# 内核路由(可选,绕开本地路由)
+ip rule add fwmark 1 lookup 100
+ip route add local 0.0.0.0/0 dev lo table 100
+iptables -t mangle -A PREROUTING -p tcp --dport 3306 -j MARK --set-mark 1
+```
+
+**特点**:upstream 看到真实 client IP,但**要求 RS 配合 Director 当网关**(回程路由)。
+
+#### 方式 C: proxy_bind 指定本地源 IP(NAT-like)
+
+```nginx
+stream {
+    upstream mysql {
+        server 10.0.0.11:3306;
+    }
+
+    server {
+        listen 3306;
+        proxy_pass mysql;
+        proxy_bind 192.168.1.10:33060;    # 指定出口 IP + 端口
+    }
+}
+```
+
+upstream **看到的是 Nginx 自己 IP**;要传真实 IP 还得靠 PROXY protocol 或 TPROXY。
+
+### 3. 完整链路: client → CDN → LB → Nginx → upstream
+
+```text
+client (1.2.3.4)
+   │
+   ▼
+CDN edge    X-Forwarded-For: 1.2.3.4
+   │
+   ▼
+LB          X-Forwarded-For: 1.2.3.4, <cdn_ip>
+   │
+   ▼
+Nginx L7    X-Forwarded-For: 1.2.3.4, <cdn_ip>, <lb_ip>
+   │
+   ▼
+upstream    remote_addr = Nginx IP,但能解析 XFF 得真实 IP
+```
+
+**Nginx 多层配置**:
+
+```nginx
+http {
+    # 第一层 Nginx(CDN 后)
+    set_real_ip_from <cdn_edge_ip>;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+    # $remote_addr 此时是 <cdn_ip>,解析 XFF 后变 client IP
+
+    # 第二层 Nginx(LB 后)
+    set_real_ip_from <lb_internal_ip>;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+}
+```
+
+每层**只信任自己的直接上游**,XFF 链式追加,不互相覆盖。
+
+### 4. 方案对比
+
+| 方案 | L4/L7 | upstream 改动 | 复杂度 | 适用 |
+| ---- | ----- | -------------- | ------ | ---- |
+| **X-Forwarded-For** | L7 | 读 header | **低** | Web / API |
+| **realip_module** | L7 | 解析 `$remote_addr` | 低 | Web / API |
+| **PROXY protocol** | L4 | 协议层解析 | 中 | TCP 服务(数据库 / Redis) |
+| **TPROXY** | L4 | 路由层配合 | 高 | TCP 服务,要求高 |
+| **proxy_bind** | L4 | 无(Nginx 自身 IP) | 低 | 仅需固定出口 IP |
+
+### 5. 验证脚本
+
+```bash
+# L7:看 upstream 是否拿到真实 IP
+curl -H "X-Forwarded-For: 1.2.3.4" http://nginx/api/test
+# upstream log 应显示:
+#   remote_addr: Nginx 内网 IP
+#   X-Real-IP:   1.2.3.4(注入后)
+#   X-Forwarded-For: 1.2.3.4, client_real_ip
+
+# L4 + PROXY protocol:抓包
+tcpdump -i eth0 -nn -X port 3306
+# 第一行应见:PROXY TCP4 <client_ip> <rs_ip> ...
+
+# L4 + TPROXY:upstream 应看到 client 真实 IP
+mysql -h rs -e "SELECT HOST FROM information_schema.processlist WHERE ID = CONNECTION_ID();"
+```
+
+### 6. 陷阱
+
+- **不要无条件信任 XFF**:`set_real_ip_from` 必须**精确**列出可信代理,否则伪造 XFF 即可绕过 IP 黑名单
+- **`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` 是追加**,**不要**用 `$http_x_forwarded_for`(会覆盖,且不会追加 client IP)
+- **`real_ip_recursive on`** 必须开,否则多层代理时取到的是中间代理 IP
+- **TPROXY 需要 root + 内核能力**:`setcap cap_net_admin+ep`
+- **TPROXY + 防火墙**:RS 端若启用反向路径过滤(`rp_filter`),需关掉或正确路由
+- **PROXY protocol 不兼容老版本 Redis**:Redis 6 以下不支持,需 ProxySQL
+
+---
+
+## 二十一、核心要点速记
 
 - **Nginx = 事件驱动 + 异步 I/O**,单 Worker 可处理上万连接
 - **Master / Worker 模型**:`worker_processes auto`,一般等于 CPU 核数
@@ -1256,3 +1473,4 @@ journalctl -u nginx -f       # 日志
 - **平滑升级**:编译新版本替换,`nginx -s reload` 不中断运行中的请求
 - **logrotate** + `nginx -s reopen` 切割日志
 - **Nginx 是 L7 反代 + L4 stream** 双能力,云原生时代仍是入口首选之一
+

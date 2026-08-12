@@ -1272,7 +1272,267 @@ local0.* /var/log/haproxy.log
 
 ---
 
-## 二十、核心要点速记
+## 二十、实战案例: 七层与四层转发透传真实客户端 IP
+
+场景:反代后,upstream 只能看到 HAProxy IP(不是真实 client);要做访问日志、限流、地理识别、攻击溯源,需要**透传真实客户端 IP**。
+
+### 1. 七层(L7,mode http)透传
+
+#### 方式 A:option forwardfor(主流方案)
+
+HAProxy 通过 `option forwardfor` 自动注入 `X-Forwarded-For` 头,upstream 解析即可。
+
+```haproxy
+frontend ft_http
+    bind *:80
+
+    # 默认注入 X-Forwarded-For
+    option forwardfor
+
+    # 可选:Header 名改成 X-Real-IP
+    option forwardfor header X-Real-IP except 127.0.0.1
+
+    # Header 值用 src + 随机串(防伪)
+    # option forwardfor header X-Real-IP header-value-bytes 50
+
+    default_backend bk_web
+
+backend bk_web
+    option forwardfor
+    http-request set-header X-Forwarded-Proto https if { ssl_fc }
+    server web1 10.0.0.1:80
+```
+
+**关键点**:
+
+| 选项 | 含义 |
+| ---- | ---- |
+| `option forwardfor` | 注入 `X-Forwarded-For` 头,值为 client 真实 IP |
+| `header <name>` | 自定义头名(如 `X-Real-IP`) |
+| `except <network>` | 例外:不注入(内部健康检查) |
+| `if-none` | 仅当头不存在时注入 |
+| `header-value-bytes N` | 限制头值长度 |
+
+#### 方式 B:HAProxy 解析上游送来的 XFF
+
+如果客户端 → CDN → LB → HAProxy,多层代理时,HAProxy 解析 `X-Forwarded-For` 取最左侧:
+
+```haproxy
+frontend ft_http
+    bind *:80
+
+    # HAProxy 默认取 XFF 的最左侧 IP 作为 src
+    # (X-Forwarded-For: client, cdn_ip → src = client)
+    option forwardfor header X-Forwarded-For
+```
+
+#### 上游应用读取
+
+```python
+# Python Flask
+from flask import request
+real_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+real_ip = real_ip.split(",")[0].strip()     # 取最左侧
+
+# Java Spring Boot
+# server.forward-headers-strategy=native
+
+# Nginx upstream
+proxy_set_header X-Real-IP $http_x_forwarded_for;
+```
+
+### 2. 四层(L4,mode tcp)透传
+
+L4 没有 HTTP header,要传真实 IP 必须用其他机制。
+
+#### 方式 A:PROXY protocol(推荐,HAProxy 原生)
+
+HAProxy 给 upstream 发 PROXY 协议头,upstream 解析。
+
+**HAProxy side(发送方)**:
+
+```haproxy
+frontend ft_tcp_mysql
+    bind *:3306
+    mode tcp
+
+    # 关键:给 upstream 加 PROXY 协议头
+    # send-proxy 是 default backend 配置项
+    default_backend bk_mysql
+
+backend bk_mysql
+    mode tcp
+    option mysql-check user haproxy
+    # 让 upstream 收到 PROXY 协议头
+    server db1 10.0.0.11:3306 send-proxy
+    server db2 10.0.0.12:3306 send-proxy
+```
+
+握手时,HAProxy 发:`PROXY TCP4 <client_ip> <rs_ip> <client_port> <rs_port>\r\n`
+
+**v2 协议头**(PROXY protocol v2):
+
+```haproxy
+backend bk_mysql
+    server db1 10.0.0.11:3306 send-proxy-v2
+```
+
+#### 方式 B:HAProxy 作为接收方(accept-proxy)
+
+当上游是另一个 HAProxy / Nginx 时,接收 PROXY 协议:
+
+```haproxy
+# 接收 PROXY 协议的 HAProxy
+frontend ft_from_lb
+    bind *:80 accept-proxy         # 接收 PROXY 协议头
+
+    # 真实 client IP 通过 PROXY 解析
+    # $src 现在是真实 client IP,不是 LB 内网 IP
+
+    mode http
+    default_backend bk_web
+```
+
+**配合 src + stick-table**:
+
+```haproxy
+frontend ft_from_lb
+    bind *:80 accept-proxy
+    mode http
+
+    # 基于真实 IP 做限流
+    acl abuse src -f /etc/haproxy/abuse.lst
+    http-request deny if abuse
+
+    default_backend bk_web
+```
+
+#### 方式 C:TPROXY(IP_TRANSPARENT,内核级)
+
+让 HAProxy **用 client 的源 IP** 连接 upstream。
+
+```haproxy
+global
+    # 允许 HAProxy 用任意 IP 作源 IP
+    # 需要内核 IP_TRANSPARENT 能力 + root 启动
+
+defaults
+    # 让连接用 client 的源 IP
+    # (在 backend 中具体配置)
+    source 0.0.0.0 usesrc clientip
+```
+
+```bash
+# 启动时需要内核权限
+# HAProxy ≥ 2.0 + Linux IP_TRANSPARENT
+setcap cap_net_bind_service,cap_net_admin+ep /usr/sbin/haproxy
+
+# 内核路由
+ip rule add fwmark 1 lookup 100
+ip route add local 0.0.0.0/0 dev lo table 100
+iptables -t mangle -A PREROUTING -p tcp --dport 3306 -j MARK --set-mark 1
+
+# RS 端:Director 必须当网关(否则回程找不到 client)
+route add default gw <haproxy_ip>
+```
+
+**特点**:upstream 看到真实 client IP,但**要求 RS 配合 HAProxy 当网关**(回程路由)。
+
+#### 方式 D:source / usesrc 部分保留
+
+```haproxy
+backend bk_mysql
+    # 让 HAProxy 连接 upstream 时,源 IP 来自 $src(已通过 PROXY/XFF 解析后的 IP)
+    source $src
+
+backend bk_app
+    # 用 client IP 连接上游
+    # requires IP_TRANSPARENT capability
+    source 0.0.0.0 usesrc clientip
+```
+
+### 3. 完整链路: client → CDN → LB → HAProxy → upstream
+
+```text
+client (1.2.3.4)
+   │
+   ▼
+CDN edge    X-Forwarded-For: 1.2.3.4
+   │
+   ▼
+LB HAProxy  X-Forwarded-For: 1.2.3.4, <cdn_ip>
+            $src = 1.2.3.4(解析 XFF)
+   │
+   ▼
+HAProxy L7  X-Forwarded-For: 1.2.3.4, <cdn_ip>, <lb_ip>
+            (option forwardfor 自动追加)
+   │
+   ▼
+upstream    解析 XFF 得真实 IP
+```
+
+**HAProxy 多层配置**:
+
+```haproxy
+# 第一层 HAProxy(CDN 后)
+frontend ft_from_cdn
+    bind *:80
+    # 取 XFF 最左侧作为 src
+    option forwardfor header X-Forwarded-For
+
+    # src 现在是真实 client IP(解析 XFF 后)
+    default_backend bk_app
+
+backend bk_app
+    # 信任 CDN IP 才解析 XFF
+    acl from_cdn src <cdn_edge_ip>
+    option forwardfor if from_cdn
+```
+
+### 4. 方案对比
+
+| 方案 | L4/L7 | upstream 改动 | 复杂度 | 适用 |
+| ---- | ----- | -------------- | ------ | ---- |
+| **option forwardfor** | L7 | 读 header | **低** | Web / API |
+| **PROXY protocol** | L4 | 协议层解析 | 中 | TCP 服务(数据库 / Redis) |
+| **accept-proxy** | L4 | 接收 PROXY 头 | 低 | LB 后端 HAProxy |
+| **TPROXY / usesrc clientip** | L4 | 路由层配合 | 高 | TCP 服务,要求高 |
+| **source $src** | L4 | 无(选 IP 出口) | 低 | 需固定 IP 出口 |
+
+### 5. 验证脚本
+
+```bash
+# L7:看 upstream 是否拿到真实 IP
+curl -H "X-Forwarded-For: 1.2.3.4" http://haproxy/
+# upstream log 应显示:
+#   X-Forwarded-For: 1.2.3.4
+#   remote_addr: <HAProxy IP>
+
+# L4 + PROXY protocol:抓包
+tcpdump -i eth0 -nn -X port 3306
+# 第一行应见:PROXY TCP4 <client_ip> <rs_ip> ...
+
+# L4 + TPROXY:upstream 应看到 client 真实 IP
+mysql -h rs -e "SELECT HOST FROM information_schema.processlist WHERE ID = CONNECTION_ID();"
+
+# Runtime API:看真实 client IP 计数
+echo "show stat" | socat stdio /var/run/haproxy.sock
+```
+
+### 6. 陷阱
+
+- **`option forwardfor except 127.0.0.1`**:避免注入健康检查的本地 IP,污染日志
+- **多层代理 XFF 解析**:`option forwardfor header X-Forwarded-For` + `accept-proxy` 配合,正确取最左侧
+- **PROXY protocol v1 vs v2**:v1 是文本(易读),v2 是二进制(更快);两端版本要一致
+- **`send-proxy` 与 `send-proxy-v2`**:选错版本 upstream 解析失败
+- **TPROXY 需要 root + 内核能力**:`setcap cap_net_admin+ep`
+- **TPROXY + 防火墙**:RS 端若启用反向路径过滤(`rp_filter`),需关掉或正确路由
+- **PROXY protocol 不兼容老版本 Redis**:Redis 6 以下不支持,需 ProxySQL
+- **accept-proxy 必须绑定的 backend 支持**:用 `bind ... accept-proxy` 不能漏掉
+
+---
+
+## 二十一、核心要点速记
 
 - **HAProxy = TCP + HTTP LB**,事件驱动 + 多线程
 - **Master + Worker(多线程)**,`nbthread 1-8 倍 CPU 核数`
