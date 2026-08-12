@@ -1362,7 +1362,421 @@ vts 模块                   # 详细指标 + Prometheus
 
 ---
 
-## 十六、WAF / 网关层应用
+## 十六、工作模式(Nginx 并发模型与连接池处理)
+
+Nginx 默认是**多进程 + 单线程事件循环**模型;从 1.7.11 起,**Worker 可以启用线程池**处理阻塞 I/O。本章比较不同工作模式(单线程事件循环、Worker 线程池、多进程接收、多 Worker 共享监听)对连接池的处理方式与适用场景。
+
+### 1. 默认工作模式:多进程 + 单线程事件循环
+
+#### 模型
+
+```text
+Master 进程
+├── Worker 1(单线程,事件循环 epoll)
+├── Worker 2(单线程,事件循环 epoll)
+└── Worker N(单线程,事件循环 epoll)
+```
+
+- **每个 Worker 一个事件循环**,通过 epoll 监听成千上万的连接
+- **每个连接(fd)固定在某个 Worker**(accept_mutex 分配)
+- **Worker 间内存独立**,通过共享内存(zone / proxy_cache / limit_req)共享
+
+#### 配置
+
+```nginx
+worker_processes auto;            # 一般 = CPU 核数
+events {
+    worker_connections 65535;     # 单 Worker 最大并发连接
+    multi_accept off;             # 默认 off:一次 accept 一个连接(accept_mutex)
+    use epoll;
+}
+```
+
+#### 连接池细节
+
+**Accept 阶段**:
+
+```text
+                    ┌─────────────┐
+                    │ Master 进程  │
+                    │  bind 80    │
+                    └──────┬──────┘
+                           │ accept_mutex 锁(避免惊群)
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+          Worker 1    Worker 2     Worker 3
+          accept(1)   (等待锁)    (等待锁)
+```
+
+- `accept_mutex on`(默认):同一时刻仅一个 worker accept,避免惊群
+- `multi_accept on`:一个 accept 循环中尽可能多地接受连接(消耗 CPU)
+
+**全连接池在 Worker 内的组织**:
+
+```text
+Worker 进程
+├─ eventfd / 唤醒 fd
+├─ epoll 实例
+│   ├─ 红黑树:已注册 fd(client + upstream + listen)
+│   └─ 就绪链表:本次 epoll_wait 返回的 fd
+├─ 连接池(client connections)
+│   ├─ c1: client 1.1.1.1:50001 → backend 10.0.0.1:80
+│   ├─ c2: client 1.1.1.1:50002 → backend 10.0.0.1:80
+│   ├─ c3: client 1.1.1.2:60001 → backend 10.0.0.2:80
+│   └─ ...
+├─ 上游 keepalive 池(连接复用)
+│   ├─ k1: nginx:random → backend 10.0.0.1:80(空闲,可复用)
+│   └─ k2: nginx:random → backend 10.0.0.2:80(空闲,可复用)
+└─ 共享内存(shm)
+    ├─ proxy_cache_path keys_zone
+    ├─ limit_req zone
+    └─ limit_conn zone
+```
+
+#### 优劣
+
+| 优点 | 缺点 |
+| ---- | ---- |
+| **避免锁竞争**:每连接固定一个 worker | 阻塞 I/O 阻塞整个 worker(只能服务其它连接) |
+| **无线程切换**:高并发性能极佳 | CPU 利用不均(部分 worker 可能负载重) |
+| **内存隔离**:worker 崩溃不影响其他 | 单 worker 阻塞 = 该 worker 上所有连接卡住 |
+
+### 2. Worker 线程池(异步线程池)
+
+**问题**:某些 I/O 操作**无法异步**(内核不支持非阻塞),如:
+
+- 大文件磁盘读写(常规 read/write 在大文件下会阻塞)
+- `open()` 慢设备(网络文件系统、NFS)
+- `stat()` / `readdir()` 文件元数据读取
+
+**解决方案**(**Nginx 1.7.11+**):为阻塞 I/O 启用独立线程池,不让事件循环阻塞。
+
+#### 配置
+
+```nginx
+# /etc/nginx/nginx.conf
+thread_pool default_pool threads=32 max_queue=65536;
+
+events {
+    worker_connections 65535;
+}
+
+http {
+    # 异步文件 I/O(用线程池)
+    aio threads;                         # 文件 I/O 走线程池
+    sendfile on;
+
+    server {
+        location /bigfile {
+            aio threads;
+            sendfile off;                # 大文件不用 sendfile
+            output_buffers 2 256k;
+        }
+    }
+}
+```
+
+#### 工作模式
+
+```text
+Worker 进程
+├─ 主线程(事件循环)
+│   ├─ epoll_wait() 监听 fd
+│   └─ 处理网络事件(read / write)
+│
+└─ 线程池(默认 default_pool,32 线程 + 65536 队列)
+    ├─ Thread 1 ──>  文件 AIO、阻塞 readdir 等
+    ├─ Thread 2 ──>
+    ├─ Thread 3 ──>
+    └─ ... ──>
+```
+
+- **主线程不阻塞**:遇到阻塞 I/O,把任务交给线程池
+- **线程完成任务 → 通过 eventfd 通知主线程** → 唤醒 epoll_wait → 处理结果
+- **线程池独立,事件循环不被阻塞**
+
+#### 适用场景
+
+- **静态大文件服务**(GB 级视频 / 安装包)
+- **NFS / 慢磁盘**文件系统
+- **大量 `openat()` 调用**的场景
+
+#### 优劣
+
+| 优点 | 缺点 |
+| ---- | ---- |
+| 主线程不阻塞 | 线程有创建 / 上下文切换成本 |
+| 大文件 I/O 性能显著提升 | 线程多了反而慢(经验值 16-64) |
+| 慢设备不影响主循环 | 增加内存占用 |
+
+#### 调优经验
+
+| threads | max_queue | 适用 |
+| ------- | --------- | ---- |
+| 8 | 65536 | 4-8 CPU 核 |
+| 16 | 65536 | 8-16 CPU 核 |
+| 32 | 65536 | 16-32 CPU 核(经验上限) |
+| 64+ | – | 不推荐(线程切换收益递减) |
+
+### 3. 多进程接收:reuseport 共享监听
+
+#### 问题
+
+默认 `accept_mutex` 让多个 worker 排队 accept,**扩展性受限**:
+
+```text
+100K QPS,1 个 Worker accept → 锁竞争 → 单核瓶颈
+```
+
+#### 解决方案:`SO_REUSEPORT` 共享监听套接字
+
+```nginx
+server {
+    listen 80 reuseport;            # 多进程共享同一 listen socket
+}
+
+events {
+    multi_accept on;
+}
+```
+
+**内核**:多个进程各自有独立 listen socket(fd),但绑在**同一端口**,**各自独立 accept**。
+
+```text
+Master 进程
+├── Worker 1: listen_fd_1 ──┐
+├── Worker 2: listen_fd_2 ──┼──→ bind(0.0.0.0:80)
+└── Worker 3: listen_fd_3 ──┘
+
+内核根据 4 元组哈希分配连接给某个 listen_fd
+```
+
+#### 优势
+
+- **避免 accept_mutex 锁竞争**
+- **连接分发到多个 worker,真并行**
+- **accept 性能几乎线性扩展**(8 worker ≈ 8x accept)
+
+#### 劣势
+
+- **连接不再集中**:每个 worker 各自维护客户端连接
+- 缓存一致性挑战(共享字典需考虑 worker 命中率)
+
+#### 性能数据
+
+| 模式 | accept QPS | 备注 |
+| ---- | ---------- | ---- |
+| accept_mutex on | ~100K | 默认 |
+| accept_mutex off + multi_accept | ~200K | 单 worker 内反复 accept |
+| **reuseport + multi_accept** | **~800K+** | **多 worker 共享监听** |
+
+### 4. 多 Worker 共享监听 vs accept_mutex
+
+```text
+accept_mutex(默认):
+   1 个 listen socket(主进程)
+   ↓
+   accept_mutex 抢锁
+   ├─ Worker 1 抢到,accept 100 个连接
+   ├─ Worker 2 抢到,accept 100 个
+   └─ Worker N 抢到,accept 100 个
+   缺点:锁竞争 + 惊群
+
+reuseport:
+   N 个 listen socket(每个 worker 一个)
+   ├─ Worker 1 独立 accept(无锁)
+   ├─ Worker 2 独立 accept(无锁)
+   └─ Worker N 独立 accept(无锁)
+   优点:无锁,真并行
+```
+
+### 5. 工作模式对比矩阵
+
+| 维度 | 单进程 | 多进程 + accept_mutex | **多进程 + reuseport** | **多进程 + 线程池** |
+| ---- | ------ | --------------------- | ----------------------- | ------------------- |
+| **Worker 数** | 1 | N(auto) | **N(auto)** | **N(auto)** |
+| **线程模型** | 单线程 | 单线程 | **单线程** | **主线程 + 线程池** |
+| **accept 锁** | 无 | **有(accept_mutex)** | **无(独立 listen)** | 同 accept_mutex / reuseport |
+| **可处理并发** | ~50K | ~100K | **~500K+** | ~100K(主线程)+ 线程池容量 |
+| **阻塞 I/O** | 阻塞主循环 | 阻塞主循环 | 阻塞主循环 | **线程池异步,不阻塞** |
+| **大文件 I/O** | 卡 | 卡 | 卡 | **线程池异步** |
+| **内存占用** | 低 | 中(N 倍) | 中(N 倍) | 中偏高 |
+| **配置难度** | 低 | 低 | 低 | 中 |
+
+### 6. 全连接池在不同模式下的差异
+
+```text
+单进程:
+   一条 epoll + 一个连接池 → 简单但扩展性差
+
+多进程 + accept_mutex:
+   N 条 epoll + N 个连接池
+   Master 唯一 listen_fd,锁分配给各 worker
+   同一 worker 内的连接复用 worker 的 keepalive 池
+
+多进程 + reuseport:
+   N 条 epoll + N 个连接池 + N 个 listen_fd
+   各 worker 独立 accept
+   各自维护 keepalive 池,跨 worker 不复用
+
+多进程 + 线程池:
+   N 条 epoll + N 个主线程 + 1 个共享线程池
+   阻塞 I/O 任务由线程池处理
+   网络事件仍由主线程处理(单线程事件循环不变)
+```
+
+### 7. Worker 间共享 vs 独立
+
+| 资源 | 默认共享方式 | 备注 |
+| ---- | ------------ | ---- |
+| listen socket | Master 持有 | accept_mutex 分配 |
+| 客户端连接 | **Worker 独立** | 一旦接受,该连接只在那个 worker |
+| upstream keepalive 池 | Worker 独立 | 跨 worker 不共享 |
+| proxy_cache | 共享内存(keys_zone) | 所有 worker 命中同一缓存 |
+| limit_req zone | 共享内存 | 所有 worker 共享计数 |
+| limit_conn zone | 共享内存 | 所有 worker 共享计数 |
+| Lua shared dict | 共享内存 | OpenResty 才有 |
+
+### 8. 选型决策
+
+```text
+Q1: 是否需要支持大文件 / 慢磁盘 I/O?
+   ├── 是 ──→ aio threads + 线程池
+   └── 否 ──→ Q2
+
+Q2: 是否高并发(10K+ QPS)接入?
+   ├── 是 ──→ reuseport + multi_accept
+   └── 否 ──→ 默认(accept_mutex)
+
+Q3: Worker 数?
+   worker_processes auto             # 一般 = CPU 核数
+
+Q4: 单连接 IO 密集?
+   ├── 是 ──→ threads=N 调大,worker 不要过多
+   └── 否 ──→ 默认即可
+```
+
+### 9. 实战配置
+
+#### 反向代理 / Web(典型配置)
+
+```nginx
+worker_processes auto;            # = CPU 核数
+worker_cpu_affinity auto;
+worker_rlimit_nofile 65535;
+
+events {
+    worker_connections 65535;
+    multi_accept on;
+    use epoll;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    keepalive_timeout 65;
+    keepalive_requests 1000;
+
+    # 上游 keepalive 池
+    upstream backend {
+        server 10.0.0.1:8080;
+        server 10.0.0.2:8080;
+        keepalive 32;             # 每 worker 维护 32 条到上游的长连接
+    }
+
+    server {
+        listen 80 reuseport;        # 多 worker 共享 80
+        server_name example.com;
+
+        location / {
+            proxy_pass http://backend;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+    }
+}
+```
+
+#### 大文件 + 线程池(视频 / 镜像)
+
+```nginx
+worker_processes auto;
+
+thread_pool io_pool threads=16 max_queue=65536;
+# aio threads 块默认使用 default_pool
+# aio threads=io_pool(1.27.4+)用指定线程池
+
+events {
+    worker_connections 65535;
+    multi_accept on;
+}
+
+http {
+    sendfile on;
+
+    server {
+        listen 80 reuseport;
+
+        # 大文件:走线程池,主线程不阻塞
+        location /video {
+            aio threads;
+            sendfile off;
+            output_buffers 4 1m;
+            max_ranges 0;          # 不分片
+        }
+
+        # 小文件:常规 sendfile,无线程池开销
+        location /static {
+            sendfile on;
+            expires 30d;
+        }
+    }
+}
+```
+
+### 10. 调优清单
+
+```text
+默认:
+  worker_processes auto
+  events: epoll, accept_mutex on
+
+高并发:
+  worker_processes auto
+  events: epoll, reuseport, multi_accept on
+  upstream: keepalive 32+
+
+大文件 / 慢磁盘:
+  thread_pool default_pool threads=16
+  aio threads;
+  output_buffers 4 1m
+
+调试:
+  worker_cpu_affinity auto
+  worker_rlimit_nofile 65535
+```
+
+### 11. 工作模式决策图
+
+```text
+              Nginx 工作模式
+                    │
+        ┌───────────┴───────────┐
+        │                       │
+  默认(单线程事件循环)   启用线程池
+        │                       │
+   ┌────┴────┐                  │
+   │         │                  │
+accept_mutex  reuseport         │
+   默认        高并发            │
+                              适用:
+                              - 大文件
+                              - 慢磁盘
+                              - NFS
+```
+
+**绝大多数场景使用默认模式即可**;**reuseport 在高并发接入下显著提升**;**线程池仅在阻塞型 I/O 多时启用**。
+## 十七、WAF / 网关层应用
 
 ### 1. IP 黑名单(geo)
 
@@ -1469,7 +1883,7 @@ server {
 
 ---
 
-## 十六、调试与监控
+## 十八、调试与监控
 
 ### 1. error_log
 
@@ -1528,7 +1942,7 @@ perf script | ./stackcollapse-perf.pl > out.folded
 
 ---
 
-## 十七、常见陷阱
+## 十九、常见陷阱
 
 ### 1. `if` 指令陷阱
 
@@ -1599,7 +2013,7 @@ events {
 
 ---
 
-## 十八、Nginx vs 其他网关
+## 二十、Nginx vs 其他网关
 
 | 维度          | Nginx             | HAProxy       | Envoy           | OpenResty / Kong | Caddy           |
 |---------------|-------------------|---------------|-----------------|-------------------|-----------------|
@@ -1614,7 +2028,7 @@ events {
 
 ---
 
-## 十九、部署与运维
+## 二十一、部署与运维
 
 ### 1. 安装
 
@@ -1758,7 +2172,7 @@ journalctl -u nginx -f       # 日志
 
 ---
 
-## 二十、实战案例: 七层与四层转发透传真实客户端 IP
+## 二十二、实战案例: 七层与四层转发透传真实客户端 IP
 
 场景:反代后,upstream 只能看到 Nginx IP(不是真实 client);要做访问日志、限流、地理识别、攻击溯源,需要**透传真实客户端 IP**。
 
@@ -1975,7 +2389,7 @@ mysql -h rs -e "SELECT HOST FROM information_schema.processlist WHERE ID = CONNE
 
 ---
 
-## 二十一、核心要点速记
+## 二十三、核心要点速记
 
 - **Nginx = 事件驱动 + 异步 I/O**,单 Worker 可处理上万连接
 - **Master / Worker 模型**:`worker_processes auto`,一般等于 CPU 核数
