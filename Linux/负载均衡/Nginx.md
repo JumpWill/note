@@ -2389,7 +2389,616 @@ mysql -h rs -e "SELECT HOST FROM information_schema.processlist WHERE ID = CONNE
 
 ---
 
-## 二十三、核心要点速记
+## 二十三、实战案例: 文件服务器 + 用户认证
+
+本章给出两个高频实战配置:大文件服务站点(企业内部文档/镜像/视频分发)、受限资源访问(Basic 鉴权 + 子请求鉴权 + JWT)。
+
+### 1. 案例一:Nginx 作为文件服务器
+
+#### 1.1 场景
+
+- 企业内部文档 / 资源分发
+- 软件镜像站(Linux ISO / Docker 镜像)
+- 视频 / 安装包 / 备份文件分发
+- 静态资源 CDN 边缘
+
+#### 1.2 需求要点
+
+```text
+✓ 大文件 GB 级 → 必须用 aio threads + sendfile off
+✓ 目录浏览(允许用户浏览目录) → autoindex
+✓ 浏览器缓存(图片 / 视频长期缓存)
+✓ 断点续传 → 默认支持(Range)
+✓ 限速(防被刷光带宽)
+✓ 防盗链(只允许公司域名引用)
+✓ 隐藏内部文件(.git / .env)
+✓ 限 IP 访问 / 内网访问
+```
+
+#### 1.3 完整配置
+
+```nginx
+# ============ /etc/nginx/nginx.conf ============
+
+worker_processes  auto;
+worker_rlimit_nofile 65535;
+
+# 大文件 I/O 线程池(关键!)
+thread_pool io_pool threads=16 max_queue=65536;
+
+events {
+    worker_connections 65535;
+    multi_accept on;
+    use epoll;
+    accept_mutex on;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;                 # 小文件 / 普通文件零拷贝
+    tcp_nopush    on;
+    keepalive_timeout 65;
+
+    # 通用日志
+    log_format main '$remote_addr - $remote_user [$time_local] '
+                    '"$request" $status $body_bytes_sent '
+                    'rt=$request_time uct=$upstream_connect_time '
+                    'urt=$upstream_response_time';
+    access_log /var/log/nginx/access.log main buffer=32k flush=5s;
+
+    # ============ 主站点(目录浏览) ============
+    server {
+        listen 80 reuseport;
+        server_name files.example.com;
+
+        root /data/files;
+        charset utf-8;
+
+        # 安全:隐藏文件(除 .well-known)
+        location ~ /\.(?!well-known) {
+            deny all;
+        }
+
+        # 默认首页(目录列表)
+        location / {
+            autoindex on;
+            autoindex_exact_size off;
+            autoindex_localtime on;
+            autoindex_format html;
+
+            # 普通文件零拷贝(走 sendfile,不阻塞)
+            sendfile on;
+        }
+
+        # 图片 / 视频:长期缓存
+        location ~* \.(jpg|jpeg|png|gif|webp|webm|mp4|ico)$ {
+            expires 365d;
+            add_header Cache-Control "public, immutable, max-age=31536000";
+            access_log off;
+        }
+
+        # 软件包:中期缓存(7 天)
+        location ~* \.(zip|tar|gz|iso|deb|rpm|dmg|exe|pkg|whl)$ {
+            expires 7d;
+            add_header Cache-Control "public, max-age=604800";
+            limit_rate 5m;            # 下载限速 5 MB/s
+        }
+
+        # GB 级大文件:走线程池
+        location /videos/ {
+            alias /data/videos/;
+            sendfile off;            # 大文件不用 sendfile
+            aio threads;             # 关键:主线程不阻塞
+            output_buffers 4 1m;     # 大 buffer
+            max_ranges 0;            # 不分片
+            tcp_nodelay off;         # 大文件:Nagle 合并包更优
+            limit_rate_after 10m;    # 前 10MB 不限速
+            limit_rate 20m;            # 之后 20 MB/s
+            expires 30d;
+        }
+
+        # 防盗链:仅允许白名单
+        location ~* \.(jpg|jpeg|png|gif|webp|mp4)$ {
+            valid_referers none blocked server_names
+                            files.example.com *.example.com;
+            if ($invalid_referer) {
+                return 403;
+            }
+        }
+
+        # 健康检查
+        location = /health {
+            access_log off;
+            return 200 "OK\n";
+        }
+
+        # 错误页
+        error_page 404 /404.html;
+        location = /404.html {
+            root /var/www/errors;
+            internal;
+        }
+    }
+
+    # ============ 镜像源(限内网 IP) ============
+    server {
+        listen 80 reuseport;
+        server_name mirror.example.com;
+
+        root /data/mirror;
+        autoindex on;
+        autoindex_localtime on;
+
+        # 仅内网访问
+        allow 10.0.0.0/8;
+        allow 192.168.0.0/16;
+        allow 172.16.0.0/12;
+        deny  all;
+
+        location ~ /\.(?!well-known) {
+            deny all;
+        }
+    }
+}
+```
+
+#### 1.4 系统优化(配套)
+
+```bash
+# /etc/security/limits.conf
+* soft nofile 65535
+* hard nofile 65535
+
+# /etc/sysctl.conf
+fs.file-max = 2097152
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+
+# 网卡多队列
+ethtool -L eth0 combined 8
+echo f > /sys/class/net/eth0/queues/rx-0/rps_cpus
+
+# 准备文件目录
+mkdir -p /data/files /data/videos /data/mirror
+chown -R nginx:nginx /data
+```
+
+#### 1.5 验证
+
+```bash
+# 普通文件测试
+curl -I https://files.example.com/README.md
+
+# 大文件断点续传
+curl -C - -O https://files.example.com/videos/large.mp4
+
+# 目录浏览
+curl https://files.example.com/
+
+# 防盗链测试
+curl -H 'Referer: https://evil.com' https://files.example.com/test.jpg
+# 应返回 403
+
+# 限速验证
+curl -o /dev/null --limit-rate 1M https://files.example.com/test.zip
+```
+
+#### 1.6 监控
+
+```bash
+# 监控下载连接数
+ss -tan | grep ':80 ' | grep ESTAB | wc -l
+
+# 大文件下载进度(实时)
+for f in /var/log/nginx/access.log; do
+    tail -F $f | awk '/GET \/videos/ {print}'
+done
+```
+
+---
+
+### 2. 案例二:Nginx 用户认证配置
+
+Nginx 提供三种认证方式:Basic 鉴权、子请求鉴权(auth_request)、第三方 JWT/LDAP 集成。
+
+#### 2.1 场景
+
+- 后台管理页面(`/admin/`)
+- 临时文件下载(链接带签名)
+- 内部 API 限访问
+- 与外部鉴权服务集成(JWT / OAuth / LDAP)
+
+#### 2.2 方式 A:Basic 鉴权(最简单)
+
+##### 配置
+
+```bash
+# 1. 生成密码文件
+yum install -y httpd-tools
+htpasswd -c /etc/nginx/.htpasswd admin
+# New password: ********
+# Re-type new password: ********
+
+# 添加其他用户
+htpasswd /etc/nginx/.htpasswd user1
+```
+
+##### Nginx 配置
+
+```nginx
+server {
+    listen 80;
+    server_name admin.example.com;
+
+    # 受保护目录
+    location /admin/ {
+            auth_basic           "Admin Area";
+            auth_basic_user_file /etc/nginx/.htpasswd;
+
+            # 可选:按用户限制
+            # auth_basic_user_file /etc/nginx/.htpasswd;
+            # if ($remote_user != "admin") { return 403; }
+    }
+
+    # 公开目录
+    location / {
+        # 不需要鉴权
+    }
+}
+```
+
+##### 验证
+
+```bash
+# 不带认证 → 401
+curl -I https://admin.example.com/admin/
+# HTTP/1.1 401 Unauthorized
+
+# 带认证 → 200
+curl -u admin:password https://admin.example.com/admin/
+
+# 浏览器:弹窗输入用户名/密码
+```
+
+##### 优缺点
+
+| 优点 | 缺点 |
+| ---- | ---- |
+| 配置简单 | **明文 base64**(需配合 HTTPS) |
+| 不依赖外部服务 | 用户管理需手动 |
+| 浏览器友好 | 无法 logout / 注销 |
+
+#### 2.3 方式 B:auth_request 子请求鉴权(推荐)
+
+##### 架构
+
+```text
+请求 → Nginx location /api/ → auth_request /auth → 鉴权服务 /verify
+                                                      ↓
+                                                   返回 200 / 401 / 403
+                                                      ↓
+                            ←────────────────────  鉴权结果
+      ↓ 通过则代理到 upstream
+      ↓ 不通过则直接返回 401 / 403
+```
+
+##### 鉴权服务示例(Python)
+
+```python
+# /opt/auth/verify.py
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import os
+
+VALID_TOKENS = {"alice_token_123", "bob_token_456"}
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        auth = self.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else auth
+
+        if token in VALID_TOKENS:
+            self.send_response(200)
+            self.send_header("X-User", token.split("_")[0])
+            self.send_header("X-Roles", "user")
+            self.end_headers()
+        else:
+            self.send_response(401)
+            self.end_headers()
+
+    def do_POST(self):
+        self.do_GET()
+
+    def log_message(self, format, *args): pass
+
+if __name__ == "__main__":
+    HTTPServer(("127.0.0.1", 9000), Handler).serve_forever()
+```
+
+```bash
+python3 /opt/auth/verify.py &
+```
+
+##### Nginx 配置
+
+```nginx
+upstream auth_service {
+    server 127.0.0.1:9000;
+}
+
+upstream backend {
+    server 10.0.0.1:8080;
+    server 10.0.0.2:8080;
+}
+
+server {
+    listen 80;
+    server_name api.example.com;
+
+    # ===== 鉴权子端点(internal,不直接访问)=====
+    location = /_auth {
+        internal;                      # 仅内部可访问
+        proxy_pass http://auth_service/verify;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 1s;
+        proxy_read_timeout 3s;
+    }
+
+    # ===== 受保护 API =====
+    location /api/ {
+        # 触发鉴权子请求
+        auth_request /_auth;
+
+        # 把鉴权响应头透传给 upstream
+        auth_request_set $auth_user  $upstream_http_x_user;
+        auth_request_set $auth_roles $upstream_http_x_roles;
+
+        proxy_pass http://backend;
+        proxy_set_header X-User  $auth_user;
+        proxy_set_header X-Roles $auth_roles;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        # 鉴权失败时的处理
+        error_page 401 = @login_required;
+        error_page 403 = @forbidden;
+    }
+
+    # 401 响应:返回 JSON(而非 nginx 默认页)
+    location @login_required {
+        default_type application/json;
+        return 401 '{"error":"unauthorized","message":"Please login"}';
+    }
+
+    location @forbidden {
+        default_type application/json;
+        return 403 '{"error":"forbidden"}';
+    }
+
+    # ===== 公开端点(不鉴权)=====
+    location /health {
+        access_log off;
+        return 200 "OK\n";
+    }
+}
+```
+
+##### 工作流程
+
+```text
+1. 客户端: GET /api/users
+           Authorization: Bearer alice_token_123
+
+2. Nginx:  触发子请求 GET /_auth(原请求头带过去)
+           → auth_service /verify
+           → 校验通过 → 返回 200, X-User: alice
+
+3. Nginx: 鉴权子请求返回 200 → 转发原请求到 backend
+           proxy_pass http://backend;  + 带 X-User: alice
+
+4. backend 收到: GET /api/users  X-User: alice
+           → 处理 → 返回数据
+
+5. 客户端: 收到 200 + 数据
+```
+
+#### 2.4 方式 C:JWT 鉴权(无状态)
+
+##### 架构
+
+```text
+请求 → Nginx → lua-resty-jwt 解析 → 验证签名 + 过期时间 → 通过则代理
+```
+
+需 OpenResty。
+
+```nginx
+http {
+    # JWT 共享密钥
+    env JWT_SECRET;
+
+    server {
+        listen 80;
+        server_name api.example.com;
+
+        location /api/ {
+            access_by_lua_block {
+                local jwt = require "resty.jwt"
+                local auth = ngx.var.http_authorization
+                if not auth then
+                    return ngx.exit(401)
+                end
+
+                -- 提取 Bearer token
+                local token = ngx.re.match(auth, "^Bearer (.+)$")
+                if not token then
+                    return ngx.exit(401)
+                end
+
+                -- 验证 JWT
+                local secret = os.getenv("JWT_SECRET") or "my_secret"
+                local claims, err = jwt:verify(secret, token[1])
+
+                if not claims then
+                    ngx.log(ngx.ERR, "JWT invalid: ", err)
+                    return ngx.exit(401)
+                end
+
+                if claims.exp and claims.exp < ngx.now() then
+                    return ngx.exit(401)
+                end
+
+                -- 透传到后端
+                ngx.var.user_id    = claims.sub or
+                .sub
+                ngx.var.user_roles = claims.roles or
+                .or
+            }
+
+            proxy_pass http://backend;
+            proxy_set_header X-User-Id  $user_id;
+            proxy_set_header X-Roles    $user_roles;
+        }
+    }
+}
+```
+
+##### 后端读取
+
+```python
+# Flask
+@app.route("/api/users")
+def list_users():
+    user_id = request.headers.get("X-User-Id")
+    roles = request.headers.get("X-Roles")
+    return {"users": [...], "by": user_id}
+```
+
+#### 2.5 方式 D:LDAP / OAuth 集成
+
+通常用 auth_request 转发到 LDAP/OAuth 网关:
+
+```nginx
+location /app/ {
+    auth_request /oauth_verify;
+
+    proxy_pass http://app_backend;
+    proxy_set_header X-User $upstream_http_x_user;
+
+    # 401 时重定向到 OAuth 登录页
+    error_page 401 = @oauth_redirect;
+}
+
+location @oauth_redirect {
+    return 302 https://login.example.com/oauth/authorize?client_id=xxx&redirect_uri=$request_uri;
+}
+```
+
+#### 2.6 完整混合示例:BASIC + 子请求 + 限流
+
+```nginx
+http {
+    # 限流
+    limit_req_zone $binary_remote_addr zone=api:10m rate=100r/s;
+
+    upstream auth_svc { server 127.0.0.1:9000; }
+    upstream backend { server 10.0.0.1:8080; }
+
+    server {
+        listen 80;
+        server_name api.example.com;
+
+        # 子鉴权端点
+        location = /_auth {
+            internal;
+            proxy_pass http://auth_svc/verify;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+        }
+
+        # 公开端点
+        location /health {
+            access_log off;
+            return 200 "OK\n";
+        }
+
+        # 受保护 API
+        location /api/ {
+            # 1. 鉴权
+            auth_request /_auth;
+
+            # 2. 限流
+            limit_req zone=api burst=200 nodelay;
+            limit_req_status 429;
+
+            # 3. 透传身份
+            auth_request_set $auth_user $upstream_http_x_user;
+            proxy_pass http://backend;
+            proxy_set_header X-User $auth_user;
+            proxy_set_header X-Real-IP $remote_addr;
+
+            # 4. 自定义错误响应
+            error_page 401 =401;
+            error_page 429 = @rate_limited;
+        }
+
+        location @rate_limited {
+            default_type application/json;
+            return 429 '{"error":"too_many_requests"}';
+        }
+    }
+}
+```
+
+#### 2.7 验证所有方式
+
+```bash
+# Basic 鉴权
+curl -u admin:password https://admin.example.com/admin/
+
+# 子请求鉴权
+curl -H 'Authorization: Bearer alice_token_123' https://api.example.com/api/users
+# → 200 + 数据
+
+curl -H 'Authorization: Bearer wrong_token' https://api.example.com/api/users
+# → 401 + JSON
+
+# JWT 鉴权
+JWT=$(jwt-cli decode my.jwt.payload | jq -r .token)
+curl -H "Authorization: Bearer $JWT" https://api.example.com/api/users
+
+# 限流验证(快速发请求触发)
+for i in $(seq 1 1000); do
+    curl -s -H 'Authorization: Bearer alice_token_123' https://api.example.com/api/users
+done
+# 应有部分返回 429
+```
+
+#### 2.8 对比与选型
+
+| 维度 | Basic | auth_request | JWT(OpenResty) |
+| ---- | ----- | ------------ | --------------- |
+| **配置复杂度** | **低** | 中 | 中-高 |
+| **鉴权服务依赖** | 无 | 需外部 | 无(本地解析) |
+| **状态** | 无(密码文件) | 由服务决定 | **无状态** |
+| **用户管理** | htpasswd | 服务端实现 | 服务端实现 |
+| **支持协议** | HTTP | 任意 | JWT |
+| **跨域 SSO** | 否 | 可(LDAP/OAuth) | 需 OIDC |
+| **注销** | 否 | 服务端支持 | Token 黑名单 |
+| **适用** | 后台管理 / 临时保护 | API / 微服务 | 移动端 / SPA |
+
+**选型**:
+
+- **后台管理 / 临时限制** → Basic
+- **API 网关 / 统一鉴权** → auth_request
+- **SPA / 移动端 / 跨域** → JWT + OpenResty
+- **企业 SSO** → auth_request + LDAP/OAuth
+
+---
+
+## 二十四、核心要点速记
 
 - **Nginx = 事件驱动 + 异步 I/O**,单 Worker 可处理上万连接
 - **Master / Worker 模型**:`worker_processes auto`,一般等于 CPU 核数
