@@ -1,6 +1,6 @@
 # MySQL MGR 详解 (MySQL Group Replication)
 
-> 本章系统讲解 MySQL 5.7.17+ 推出的官方同步复制方案 MGR。异步/半同步主从复制见 [第 13 章](13-主从复制.md);高可用方案选型见 [第 15 章](15-高可用架构.md)。
+> 本章系统讲解 MySQL 5.7.17+ 推出的官方同步复制方案 MGR。异步/半同步主从复制见 [第 13 章](13-主从复制.md);读写分离见 [第 15 章](15-读写分离.md);高可用方案选型见 [第 16 章](16-高可用架构.md)。
 
 ## 一、MGR 概述
 
@@ -874,5 +874,6 @@ START GROUP_REPLICATION;
 - **MySQL InnoDB Cluster**: https://dev.mysql.com/doc/mysql-shell/8.0/en/admin-api-userguide.html
 - **MySQL Router**: https://dev.mysql.com/doc/mysql-router/8.0/en/
 - **第 13 章**: [主从复制(异步/半同步)](13-主从复制.md)
-- **第 15 章**: [高可用架构选型](15-高可用架构.md)
-- **第 17 章**: [性能监控与调优](17-性能监控与调优.md)
+- **第 15 章**: [读写分离](15-读写分离.md)
+- **第 16 章**: [高可用架构选型](16-高可用架构.md)
+- **第 18 章**: [性能监控与调优](18-性能监控与调优.md)
