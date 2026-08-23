@@ -1517,6 +1517,420 @@ systemd-cgls                # 树状显示
 
 ---
 
+## 十七、Docker 容器 OOM 与 cgroup memory 控制器
+
+### 17.1 内存组成与 cgroup 统计
+
+容器的内存使用分为两大类：
+
+- **RSS（Resident Set Size）**：匿名页（进程堆栈、mmap 映射的私有内存），不可回收，除非 swap。
+- **Page Cache**：文件缓存（读文件、共享库等），内核可以在内存压力下回收。
+
+cgroup 的 `memory.usage_in_bytes` 包含 RSS + Cache + 内核 slab 等。当这个值达到 `memory.limit_in_bytes` 时，内核会进入 **内存回收路径**。
+
+### 17.2 回收 vs OOM 的决策流程
+
+当容器内存使用触及上限时：
+
+**步骤 1：尝试回收 page cache**
+
+内核启动 kswapd 或直接回收，优先释放可回收的页面（page cache、dentries、inodes）。如果回收后内存使用降到限制以下，则一切正常，不会触发 OOM。
+
+**步骤 2：回收不足则触发 OOM**
+
+如果 page cache 已被压缩到很低，而 RSS 仍然占据大部分空间，并且新分配请求无法满足，内核就在该容器的 cgroup 内调用 OOM killer。
+
+**步骤 3：OOM killer 的选择**
+
+内核在该 cgroup 的所有进程中选一个"得分最高"的杀掉。得分基于进程的 RSS、swap 使用、运行时间等因素。由于 cgroup 隔离，**不会杀掉宿主机或其他容器的进程**。
+
+### 17.3 为什么 page cache 多也可能 OOM
+
+虽然 page cache 可回收，但：
+
+- 回收需要**时间**
+- 部分 page cache 可能是**脏页（dirty pages）**，必须先回写磁盘才能释放
+- 如果容器瞬间申请大量匿名内存（如 malloc 大块内存），而 page cache 很多但来不及全部回收，内核可能直接判定无法满足而触发 OOM
+
+此外，`memory.limit_in_bytes` 是**硬限制**，任何时刻都不能突破，哪怕只是瞬时的超额分配也会立即触发回收或 OOM。
+
+### 17.4 Docker 的额外控制参数
+
+| Docker 参数 | cgroup 对应 | 说明 |
+|-------------|------------|------|
+| `--memory` | `memory.limit_in_bytes` | 硬限制 |
+| `--memory-reservation` | `memory.soft_limit_in_bytes` | 软限制（仅在内存竞争时生效） |
+| `--memory-swappiness` | 内核参数 | 控制 swap 倾向，默认 60。设为 0 优先回收 page cache |
+| `--oom-kill-disable` | `memory.oom_control` | 禁止 OOM killer（容器会阻塞直到内存可用） |
+
+### 17.5 查看容器内存详情
+
+```bash
+# Docker stats 实时查看
+docker stats <container>
+
+# 进入容器查看 cgroup 详细统计
+cat /sys/fs/cgroup/memory/memory.stat
+```
+
+**memory.stat 关键字段：**
+
+| 字段 | 含义 |
+|------|------|
+| `rss` | 匿名页占用 |
+| `cache` | 页面缓存 + tmpfs |
+| `pgfault` | 缺页次数 |
+| `pgmajfault` | 主缺页次数（反映内存压力） |
+| `mapped_file` | 文件映射内存 |
+| `dirty` | 脏页数 |
+
+### 17.6 OOM 调优建议
+
+```
+1. 合理设置内存限制
+   - 不要超过节点可用内存的 70%
+   - 留出 20-30% 给系统缓存
+
+2. 调整 swappiness
+   - 数据库容器: --memory-swappiness=0 (避免 swap)
+   - 缓存容器: 默认 60
+
+3. 启用 OOM 优先级
+   - 关键服务: --oom-score-adj=-500 (减少被杀概率)
+   - 临时任务: --oom-score-adj=+500 (优先被杀)
+
+4. 监控关键指标
+   - container_memory_usage_bytes / memory.limit_bytes > 0.8 告警
+   - pgmajfault 突增反映内存压力
+   - OOM kill 事件告警
+
+5. 内存问题诊断流程
+   - docker stats 看实时使用
+   - 查 memory.stat 看 rss vs cache 比例
+   - 看内核日志 dmesg | grep -i oom
+   - 启用 PSI 监控 (memory.pressure)
+```
+
+### 17.7 内存压力 PSI (Pressure Stall Information)
+
+```bash
+# 查看内存压力 (v2 新特性)
+cat /sys/fs/cgroup/memory.pressure
+# some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+# full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+
+# some = 至少一个任务在内存竞争中阻塞
+# full = 所有任务都在内存竞争中阻塞（100% 阻塞）
+# avg10 = 10 秒窗口
+# avg60 = 60 秒窗口
+# avg300 = 5 分钟窗口
+# total = 总时间（毫秒）
+```
+
+**PSI 在自动扩缩容中应用：**
+
+```yaml
+# K8s HPA 基于内存压力自动扩缩
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: myapp
+  metrics:
+  - type: Pods
+    pods:
+      metric:
+        name: memory.pressure
+      target:
+        type: Utilization
+        averageUtilization: 70
+```
+
+### 17.8 总结
+
+Docker 容器 OOM 的判断依据是 **cgroup 总内存（RSS + Page Cache 等）超过硬限制**，但内核会先尽力回收 page cache，只有回收后依然无法满足新分配请求时，才在该容器内触发 OOM killer。
+
+---
+
+## 十八、K8s 为什么禁用 Swap
+
+### 18.1 背景：K8s 默认禁用 Swap
+
+```bash
+# 查看节点 swap 状态
+free -h
+# 输出：
+#               total        used        free      shared  buff/cache   available
+# Mem:           16Gi       4.0Gi       8.0Gi       100Mi       4.0Gi        11Gi
+# Swap:            0B          0B          0B         # ← K8s 节点 swap 通常为 0
+
+# kubelet 启动参数会拒绝有 swap 的节点
+# --fail-swap-on=true (默认)
+```
+
+### 18.2 K8s 禁用 Swap 的核心原因
+
+#### 1. 内存可预测性破坏
+
+```text
+问题场景:
+  Pod A 请求 4Gi 内存
+  但使用了 Swap:
+    - 真实内存占用: 6Gi (实际)
+    - 报告占用: 4Gi (cgroup 看不到 Swap)
+
+后果:
+  - 调度器以为节点空闲
+  - 实际节点已超载
+  - 内存耗尽时, Pod 突然变慢或 OOM Killed
+```
+
+#### 2. 性能下降
+
+```text
+Swap 与内存速度对比:
+  DDR4 内存: ~100 ns
+  NVMe SSD:  ~100,000 ns  (慢 1000 倍)
+  SATA SSD:  ~500,000 ns  (慢 5000 倍)
+  HDD:       ~10,000,000 ns (慢 100,000 倍)
+
+Swap 触发后:
+  - 应用突然变慢 10-1000 倍
+  - 数据库查询从 1ms 变成 100ms
+  - 用户感知明显卡顿
+```
+
+#### 3. cgroup 内存统计失效
+
+```text
+cgroup memory.usage_in_bytes:
+  - 只统计 RSS (物理内存)
+  - 不包含 Swap 中的内存
+
+当 Pod 使用 Swap:
+  - 真实使用: RSS (2Gi) + Swap (4Gi) = 6Gi
+  - cgroup 看到: 2Gi
+  - 触发 OOM 阈值: 8Gi (永远达不到)
+
+后果:
+  - 容器实际用 6Gi, cgroup 以为只用 2Gi
+  - 内存压力被隐藏
+  - 节点其他 Pod 被坑
+```
+
+#### 4. 调度决策错误
+
+```text
+K8s 调度器逻辑:
+  节点可用内存 = 节点总内存 - 已分配内存
+
+但如果 Pod A 用了 Swap:
+  - 已分配内存 (按 Request): 4Gi
+  - 实际使用内存 (含 Swap): 8Gi
+
+调度器误判:
+  - 以为节点空闲 4Gi
+  - 调度 Pod B 上去
+  - 实际节点内存紧张
+  - Pod A 和 Pod B 都变慢
+```
+
+#### 5. 内存回收延迟
+
+```text
+cgroup memory.high / soft limit 触发回收时:
+  - 回收 Page Cache: 快 (毫秒)
+  - 回收 Swap:    慢 (秒到分钟)
+
+影响:
+  - 回收不及时
+  - 节点内存压力持续
+  - OOM 风险增加
+```
+
+### 18.3 K8s 禁用 Swap 的具体体现
+
+#### kubelet 启动参数
+
+```bash
+# kubelet 默认配置
+kubelet --fail-swap-on=true
+
+# 行为:
+# - 检测到节点 swap > 0 → kubelet 启动失败
+# - Pod 无法调度到该节点
+# - 节点 NotReady
+```
+
+#### kubelet 配置
+
+```yaml
+# /var/lib/kubelet/config.yaml
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+failSwapOn: true  # 默认值, 检测到 swap 就失败
+```
+
+#### 节点初始化时关闭 swap
+
+```bash
+# 永久关闭 swap
+sudo swapoff -a
+sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+# 验证
+free -h | grep Swap
+# Swap: 0B 0B 0B  ✓ 已关闭
+```
+
+### 18.4 为什么有些场景要开启 Swap
+
+虽然 K8s 默认禁用 swap，但有些场景需要开启：
+
+```text
+场景 1: 内存偶尔不足
+  - 突发流量超过规划
+  - swap 兜底比 OOM kill 好
+  - 例: 离线批处理任务
+
+场景 2: 内存密集型应用
+  - 大数据分析 (Spark/Hadoop)
+  - 内存换磁盘性能 (swappiness 低)
+  - 例: 数据库冷数据缓存
+
+场景 3: 开发/测试环境
+  - 不追求极致性能
+  - swap 提供灵活性
+```
+
+### 18.5 K8s 启用 Swap 的方案
+
+#### 方案 1: kubelet 关闭 fail-swap-on (不推荐)
+
+```bash
+# kubelet 参数
+kubelet --fail-swap-on=false
+
+# 风险:
+# - 调度决策错误
+# - cgroup 统计失真
+# - 性能不可预测
+```
+
+#### 方案 2: Node-level swap + cgroups v2 (K8s 1.28+)
+
+```text
+K8s 1.28+ 支持 cgroup v2 下的 swap:
+  - kubelet 设置 memorySwap:
+    swapBehavior: LimitedSwap  # 默认
+    # 或
+    swapBehavior: UnlimitedSwap
+
+  LimitedSwap:
+    - Node 总 swap = Node 内存 * 配置比例
+    - Pod 可以使用 swap, 但限制 swap 上限
+    - K8s 仍按 Request 调度
+
+  UnlimitedSwap:
+    - Pod 可以无限制使用 swap
+    - 调度不考虑 swap
+```
+
+```yaml
+# kubelet 配置 (1.28+)
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+memorySwap:
+  swapBehavior: LimitedSwap
+```
+
+#### 方案 3: K8s + swap-aware QoS
+
+```yaml
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: app
+    resources:
+      requests:
+        memory: 1Gi
+      limits:
+        memory: 4Gi
+    # K8s 1.28+ 可以使用 swap
+    # 实际可用: 1Gi 物理内存 + 3Gi swap
+```
+
+### 18.6 各 OS 默认 swap 配置
+
+| OS | 默认 swap | 推荐 K8s 设置 |
+|----|-----------|--------------|
+| Ubuntu 22.04+ | 关闭 | 关闭 (默认) |
+| CentOS 7 | 启用 | 关闭 |
+| CentOS 8+ | 关闭 | 关闭 (默认) |
+| RHEL 8+ | 关闭 | 关闭 (默认) |
+| Debian 11+ | 关闭 | 关闭 (默认) |
+| Amazon Linux 2 | 启用 | 关闭 |
+| 阿里云镜像 | 关闭 | 关闭 (默认) |
+
+### 18.7 检测和处理节点 swap
+
+```bash
+# 1. 检测节点 swap
+for node in $(kubectl get nodes -o name); do
+    echo "Node: $node"
+    kubectl debug $node -it --image=alpine -- \
+        sh -c "free -h | grep Swap; swapon --show"
+done
+
+# 2. 临时关闭 swap (不重启)
+kubectl debug <node> -it --image=alpine -- \
+    sh -c "swapoff -a && free -h | grep Swap"
+
+# 3. 永久关闭 swap
+kubectl debug <node> -it --image=alpine -- \
+    sh -c "
+        swapoff -a
+        sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+    "
+
+# 4. 验证 kubelet 是否就绪
+kubectl get node <node> -o wide
+# Ready 状态显示
+```
+
+### 18.8 总结
+
+```
+K8s 禁用 Swap 的核心原因:
+
+1. 内存可预测性破坏 (Swap 隐藏真实用量)
+2. 性能严重下降 (Swap 比内存慢 100-1000 倍)
+3. cgroup 内存统计失效 (看不到 Swap 中的内存)
+4. 调度决策错误 (基于错误的内存视图)
+5. 内存回收延迟 (Swap 回收慢)
+
+K8s 默认配置:
+  failSwapOn: true
+  检测到 swap → kubelet 启动失败 → 节点 NotReady
+
+生产建议:
+  - 默认保持禁用 swap
+  - 关闭节点 swap: swapoff -a
+  - 注释 /etc/fstab 中 swap 行
+
+K8s 1.28+ 特殊场景:
+  - memorySwap.swapBehavior: LimitedSwap
+  - 允许 swap 但限制使用
+  - 仅特殊场景使用 (如离线批处理)
+```
+
+---
+
 ## 附录：参考资源
 
 ```
