@@ -1015,6 +1015,382 @@ Calico IPAM 分配流程：
 
 ---
 
+## 五点五、请求通信流程详解
+
+### 5.1 同节点 Pod-to-Pod 通信（caliXXXX + cbr0）
+
+```text
+场景：Node 1 上 Pod A (10.244.1.5) 与 Pod B (10.244.1.8) 通信
+
+  Node 1
+  ┌─────────────────────────────────────────────────────────────┐
+  │                                                              │
+  │  Pod A (10.244.1.5)              Pod B (10.244.1.8)         │
+  │  ┌────────────────┐                ┌────────────────┐      │
+  │  │  app 进程       │                │  app 进程       │      │
+  │  └────────┬───────┘                └────────▲───────┘      │
+  │           │                                  │              │
+  │  ┌────────▼───────┐                ┌────────┴───────┐      │
+  │  │ eth0 (容器内)  │                │ eth0 (容器内)  │      │
+  │  └────────┬───────┘                └────────▲───────┘      │
+  │           │                                  │              │
+  │           ▼                                  │              │
+  │  ┌───────────────┐                  ┌─────────┴────────┐   │
+  │  │ lxcXXX (veth) │                  │  lxcYYY (veth) │   │
+  │  └───────┬───────┘                  └─────────▲────────┘   │
+  │          │                                   │             │
+  │          └─────────┬─────────────────────────┘             │
+  │                    │                                       │
+  │            ┌───────▼───────┐                               │
+  │            │  cbr0 桥      │ ← 同一二层广播域          │
+  │            └───────┬───────┘                               │
+  │                    │                                       │
+  │            ┌───────▼───────┐                               │
+  │            │ caliXXXX      │ ← Calico 接口                │
+  │            └───────────────┘                               │
+  │                                                              │
+  └─────────────────────────────────────────────────────────────┘
+
+  详细流程（8 步）：
+    1. Pod A 应用发送 TCP 包
+       - 应用进程 → 系统调用 send()
+       - 数据包目标 IP：10.244.1.8
+       - 数据包源 IP：10.244.1.5
+
+    2. Pod A 内核网络栈
+       - 协议栈封装：IP + TCP + Payload
+       - 路由表查找：目的 IP 在同一子网（10.244.1.0/24）
+       - 决策：通过 veth 设备 lxcXXX 发出
+
+    3. lxcXXX veth 一端 → 另一端 caliXXXX
+       - veth pair 是虚拟网线
+       - 一端在 Pod A 的 netns
+       - 另一端在宿主机 netns
+
+    4. Host netns 中数据包
+       - caliXXXX 接口接收
+       - 进入 cbr0 网桥（Bridge）
+
+    5. cbr0 桥转发
+       - cbr0 MAC 表查找目的 MAC
+       - 目的 MAC：caliYYYY 接口的 MAC
+       - ARP 学习过程
+       - cbr0 学习到：10.244.1.8 → caliYYYY
+
+    6. caliYYYY 接收
+       - 数据包从 cbr0 转发到 caliYYYY
+       - 跨越二层桥接
+
+    7. lxcYYY veth 接收
+       - caliYYYY → lxcYYY → eth0（Pod B 内部）
+
+    8. Pod B 接收
+       - Pod B 应用进程收到数据
+       - 完成同节点通信
+
+  Calico 的特殊之处：
+    - 比 Flannel 多一层 caliXXXX 接口
+    - caliXXXX 是 Calico 的策略执行点
+    - 默认无数据平面处理，仅透传（同子网）
+    - iptables 规则在 caliXXXX 上生效
+
+  Felix 干预（同节点）：
+    - iptables 在 KUBE-SERVICES → cali-from-...
+    - 检查源 IP 是否在集群内
+    - 标记数据包为 cali-allow
+    - 允许转发（同子网）
+```
+
+### 5.2 跨节点 Pod-to-Pod 通信（BGP 无封装路由）
+
+```text
+场景：Node 1 上 Pod A (10.244.1.5) 发包到 Node 2 上 Pod B (10.244.2.8)
+
+  Node 1 (10.0.0.10)                         Node 2 (10.0.0.20)
+  ┌──────────────────────────┐                ┌──────────────────────────┐
+  │  Pod A 10.244.1.5         │                │  Pod B 10.244.2.8         │
+  │  ┌────────────────┐      │                │  ┌────────────────┐      │
+  │  │  app 进程       │      │                │  │  app 进程       │      │
+  │  └────────┬───────┘      │                │  └────────▲───────┘      │
+  │           │                    │                       │              │
+  │  ┌────────▼───────┐      │                │  ┌────────┴───────┐      │
+  │  │ eth0           │      │                │  │ eth0           │      │
+  │  └────────┬───────┘      │                │  └────────▲───────┘      │
+  │           │                    │                       │              │
+  │  ┌────────▼───────┐      │                │  ┌────────┴───────┐      │
+  │  │ lxcXXX (veth) │      │                │  │ lxcYYY (veth) │      │
+  │  └────────┬───────┘      │                │  └────────▲───────┘      │
+  │           │                    │                       │              │
+  │           ▼                    │                       │              │
+  │  ┌────────────────────┐  │                │  ┌────────────────────┐  │
+  │  │ cbr0 桥             │  │                │  │ cbr0 桥             │  │
+  │  └────────┬───────────┘  │                │  └────────▲───────────┘  │
+  │           │                    │                       │              │
+  │  ┌────────▼───────────┐  │                │  ┌────────┴───────────┐  │
+  │  │ caliXXXX           │  │                │  │ caliYYYY           │  │
+  │  └────────┬───────────┘  │                │  └────────▲───────────┘  │
+  │           │                    │                       │              │
+  │  ┌────────▼───────────┐  │                │  ┌────────┴───────────┐  │
+  │  │ eth0 (物理网卡)   │──┼────────────────┼──│ eth0 (物理网卡)   │  │
+  │  │ 10.0.0.10         │  │   BGP 直连      │  │ 10.0.0.20         │  │
+  │  └────────────────────┘  │                │  └────────────────────┘  │
+  └──────────────────────────┘                └──────────────────────────┘
+
+  详细流程（10 步）：
+
+  Pod A 发送包：
+    1. Pod A 应用 → 系统调用 send()
+    2. Pod A 内核封装 IP+TCP
+       - 源：10.244.1.5
+       - 目的：10.244.2.8
+    3. 路由表查找：10.244.2.0/24
+       - Calico BGP 已注入路由：
+         10.244.2.0/24 via 10.0.0.20 dev eth0
+       - 决策：通过 caliXXXX → eth0 直接转发
+
+  Node 1 处理（无封装）：
+    4. cbr0 接收
+    5. 路由表查 caliXXXX（Felix 注入路由）
+    6. caliXXXX 接收，无任何处理
+    7. eth0 发出（IP 包）
+       - 源 IP：10.244.1.5（Pod IP，未被 NAT）
+       - 目的 IP：10.244.2.8（Pod IP，未被 NAT）
+       - 中间 IP：物理网络（无隧道封装）
+
+  物理网络传输（BGP 路由）：
+    8. eth0 (10.0.0.10) 发出普通 IP 包
+       通过交换机/路由器（BGP 已通告路由）
+       到达 Node 2 eth0 (10.0.0.20)
+       - 关键：BGP 已通告 10.244.2.0/24
+       - 物理交换机知道怎么转发
+
+  Node 2 处理：
+    9. eth0 接收 IP 包（普通 IP 包，无封装）
+    10. 内核路由表查目的 IP（Felix BGP 注入）
+        - 10.244.2.0/24 dev cbr0
+        - 直接转发到 cbr0
+        - cbr0 → caliYYYY → lxcYYY → Pod B
+
+  Pod B 接收：
+    11. Pod B 应用进程收到数据
+        完成跨节点通信
+
+  关键特性：
+    - 零封装开销（无 VXLAN/IPIP）
+    - 原始 IP 包直接走 BGP 路由
+    - 性能最优（Underlay 直连）
+    - 要求：所有节点 L3 可达
+    - MTU：保持 1500（不减少）
+
+  延迟分析：
+    - 无封装开销：0 字节
+    - Linux Bridge 转发：~5-10μs
+    - 物理网络：1-10ms（同数据中心）
+    - Calico iptables：~5-10μs（路由策略）
+    - 总延迟：~10-30ms（不含 iptables）
+```
+
+### 5.3 Calico NetworkPolicy 执行流程
+
+```text
+场景：Calico NetworkPolicy 控制 Pod 流量
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                                                              │
+  │  应用 A (10.244.1.5)  →  应用 B (10.244.1.8)              │
+  │                                                              │
+  └─────────────────────────────────────────────────────────────┘
+
+  NetworkPolicy 执行流程：
+
+  1. 用户创建 NetworkPolicy
+     - kubectl apply -f networkpolicy.yaml
+     - K8s API 存储到 etcd
+     - Calico Controller watch K8s API
+     - 转换为 Calico NetworkPolicy CRD
+
+  2. Calico Controller 处理
+     - 解析规则
+     - 生成 iptables 规则
+     - 写入 Calico Felix 配置
+
+  3. Felix 接收配置
+     - 通过 typha 或直连 datastore
+     - 监听 NetworkPolicy 变化
+     - 生成本地 iptables 规则
+
+  4. iptables 规则注入
+     - 在 caliXXXX 接口上：
+       - cali-fw-cali:kns.default（默认允许同 namespace）
+       - cali-fw-cali:ksp.default=allow-http（允许 HTTP）
+       - cali-fw-cali:ksp.default（默认拒绝其他）
+
+  5. 数据包处理
+     Pod A 发出包 → veth → caliXXXX
+     caliXXXX iptables 链：
+       1. cali-fw-cali
+          - 检查 Workload Endpoint（来源 Pod）
+          - 匹配 Pod 标签：app=web
+          - 检查策略：allow 80 端口？
+          - 如果是：跳到 cali-tw-cali
+          - 如果否：跳到 cali-pri-cali（拒绝）
+       2. cali-tw-cali
+          - 检查 Workload Endpoint（目的 Pod）
+          - 匹配 Pod 标签：app=api
+          - 检查策略：allow from web？
+          - 如果是：ACCEPT
+          - 如果否：跳到默认策略
+
+  6. 决策示例
+     - Pod A (web) → Pod B (api) 80 端口：ALLOW
+     - Pod A (web) → Pod B (api) 22 端口：DENY
+     - 来自其他 Namespace：默认 DENY（如果配置）
+```
+
+### 5.4 Calico 三种数据面的 Pod 通信流程
+
+```text
+Calico 三种数据面对比：
+
+  ┌─────────────────┬──────────────────┬──────────────────┐
+  │  数据面          │  通信路径        │  延迟            │
+  ├─────────────────┼──────────────────┼──────────────────┤
+  │  无封装 BGP      │  Pod→veth→cali→  │  ~30-50μs        │
+  │  (Underlay)     │  cbr0→eth0→BGP  │  （裸机性能）    │
+  │                  │  →物理网络→eth0  │                  │
+  ├─────────────────┼──────────────────┼──────────────────┤
+  │  IPIP           │  Pod→veth→cali→  │  ~50-80μs        │
+  │  (Overlay 轻)   │  cbr0→tunl0→IPIP│  （+20B 封装）    │
+  │                  │  →物理网络→tunl0│                  │
+  ├─────────────────┼──────────────────┼──────────────────┤
+  │  VXLAN          │  Pod→veth→cali→  │  ~60-100μs       │
+  │  (Overlay 重)   │  cbr0→eth0→VXLAN│  （+50B 封装）    │
+  │                  │  →物理网络→eth0  │                  │
+  └─────────────────┴──────────────────┴──────────────────┘
+```
+
+### 5.5 Service 流量完整路径
+
+```text
+Service ClusterIP 完整路径：
+
+  Client Pod → 请求 Service ClusterIP → iptables DNAT → 后端 Pod
+
+  详细步骤：
+
+  1. Client Pod 应用发起请求
+     - curl http://my-service:80
+     - DNS 解析：CoreDNS → 10.96.10.50
+
+  2. Pod 内核封装
+     - 源 IP：10.244.1.5
+     - 目的 IP：10.96.10.50:80
+     - 协议栈：IP + TCP
+
+  3. veth → cbr0
+     - 数据包离开 Pod
+     - 进入 cbr0 桥
+
+  4. iptables PREROUTING（KUBE-SERVICES）
+     - 匹配目的 IP 10.96.10.50
+     - 跳转到 KUBE-SVC-XXX（service 链）
+
+  5. KUBE-SVC-XXX（Service 链）
+     - 统计模式（statistics-module）
+     - 跳转到 KUBE-SEP-XXX（endpoint 链）
+
+  6. KUBE-SEP-XXX（Endpoint 链）
+     - DNAT 到 backend pod IP:80
+     - 例如：10.244.1.8:8080
+
+  7. Calico Felix 链（cali-fw-cali）
+     - NetworkPolicy 检查
+     - 允许 → ACCEPT
+     - 拒绝 → DROP
+
+  8. cbr0 → caliXXXX → 后端 Pod
+
+  9. 后端 Pod 接收请求
+
+  10. 响应返回
+      - 源 IP 改为 service clusterIP（SNAT）
+      - 原路返回
+```
+
+### 5.6 BGP 在 Calico 数据流中的角色
+
+```text
+BGP 通告流程：
+
+  1. Calico 启动
+     - Felix 监听 K8s API
+     - 发现 Pod CIDR
+     - 生成本地路由表
+
+  2. BIRD 启动
+     - 与配置文件中指定的对等建立 BGP 连接
+     - 通常 full-mesh（所有节点互联）
+
+  3. BGP 通告
+     - Node 1 通告：10.244.1.0/24 via 10.0.0.10
+     - Node 2 通告：10.244.2.0/24 via 10.0.0.20
+     - 其他节点学习路由
+
+  4. 数据包转发
+     - Pod A (10.244.1.5) → Node 1
+     - Node 1 路由表：10.244.2.0/24 via 10.0.0.20
+     - 直接转发（无封装）
+     - 物理交换机根据 BGP 路由转发
+
+  BGP 在 Underlay 数据流中的关键作用：
+    - 不需要隧道封装（节省 MTU）
+    - 物理网络直接转发（接近裸机性能）
+    - 大集群需要 RR（路由反射器）
+    - 跨 AS 需要 eBGP
+```
+
+### 5.7 故障排查技巧
+
+```bash
+# 1. 同节点 Pod 通信
+kubectl exec pod-a -- ping pod-b
+
+# 2. 跨节点 Pod 通信
+kubectl exec pod-a -- ping pod-b
+# 在目标节点抓包：
+tcpdump -i caliYYYY -nn
+
+# 3. 查看 Calico 路由表
+calicoctl node diags
+
+# 4. 查看 Felix 状态
+calicoctl node status
+
+# 5. 查看 BGP peer 状态
+calicoctl bgp peers
+calicoctl bgp routes
+
+# 6. 查看 iptables 规则
+iptables -t filter -L cali-fw-cali -n
+iptables -t nat -L cali-nat-cali -n
+
+# 7. 查看 NetworkPolicy 转换
+calicoctl get networkpolicy -A
+calicoctl get globalnetworkpolicy -A
+
+# 8. 查看 IPAM Block 分配
+calicoctl ipam show
+calicoctl ipam show --block
+
+# 9. 追踪特定 Pod 流量
+calicoctl tracker show
+
+# 10. 抓包分析
+tcpdump -i any host 10.244.2.8 -w /tmp/capture.pcap
+```
+
+---
+
 ## 六、关键特性
 
 ### 6.1 NetworkPolicy 能力

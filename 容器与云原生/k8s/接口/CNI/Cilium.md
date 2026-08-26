@@ -512,6 +512,397 @@ Hubble 架构：
 
 ---
 
+## 五点五、请求通信流程详解
+
+### 5.1 同节点 Pod-to-Pod 通信（eBPF sock_ops）
+
+```text
+场景：Node 1 上 Pod A (10.244.1.5) 与 Pod B (10.244.1.8) 通信
+
+  Node 1
+  ┌─────────────────────────────────────────────────────────────┐
+  │                                                              │
+  │  Pod A (10.244.1.5)              Pod B (10.244.1.8)         │
+  │  ┌────────────────┐                ┌────────────────┐      │
+  │  │  app 进程       │                │  app 进程       │      │
+  │  └────────┬───────┘                └────────▲───────┘      │
+  │           │                                  │              │
+  │  ┌────────▼───────┐                ┌────────┴───────┐      │
+  │  │ eth0           │                │ eth0           │      │
+  │  └────────┬───────┘                └────────▲───────┘      │
+  │           │                                  │              │
+  │           ▼                                  │              │
+  │  ┌───────────────┐                  ┌─────────┴────────┐   │
+  │  │ lxcXXX (veth) │                  │  lxcYYY (veth) │   │
+  │  └───────┬───────┘                  └─────────▲────────┘   │
+  │          │                                   │             │
+  │          └─────────┬─────────────────────────┘             │
+  │                    │                                       │
+  │            ┌───────▼───────┐                               │
+  │            │  lxcBridge   │ ← 同节点二层桥              │
+  │            └───────────────┘                               │
+  │                                                              │
+  └─────────────────────────────────────────────────────────────┘
+
+  详细流程（eBPF 路径）：
+
+  1. Pod A 应用发起 send() 系统调用
+     - 数据包进入 socket 层
+
+  2. eBPF sock_ops 钩子触发（内核态）
+     - 拦截 socket 操作
+     - 检查目的 IP 是否在同一节点
+     - 发现 10.244.1.8 在同一节点
+     - 决策：无需经过 cilium_host/veth
+
+  3. eBPF sk_lookup 钩子（内核态）
+     - 查询路由表（eBPF Map）
+     - 找到目的 Pod 的 veth 接口
+
+  4. eBPF redirect 钩子
+     - 直接重定向 socket 到目标 veth
+     - 完全跳过 Host 网络栈
+     - 性能：跳过整个 Host TCP/IP 协议栈
+
+  5. 数据包通过 veth 到达 Pod B
+     - lxcXXX → lxcYYY（同一节点）
+     - 内核态直接转发
+
+  6. Pod B 接收
+     - Pod B 应用进程收到数据
+
+  关键优势：
+    - 完全在内核态执行（无用户态切换）
+    - 跳过 Host 网络协议栈（最大优化）
+    - 延迟：~5μs（业界最快）
+    - 不需要 iptables（eBPF 替代）
+    - 不需要 conntrack（eBPF Map 替代）
+
+  eBPF 与 iptables 对比：
+    iptables 路径：
+      Pod A → veth → cbr0 → iptables → caliXXXX → ... → Pod B
+      （3-5 个 iptables 链匹配，每个 ~5μs）
+
+    eBPF 路径：
+      Pod A → sock_ops 拦截 → sk_lookup 查路由 → redirect 直接转发 → Pod B
+      （2 个 eBPF 程序执行，每个 ~1μs）
+```
+
+### 5.2 跨节点 Pod-to-Pod 通信（eBPF XDP / TC）
+
+```text
+场景：Node 1 上 Pod A (10.244.1.5) 发包到 Node 2 上 Pod B (10.244.2.8)
+
+  Node 1 (10.0.0.10)                         Node 2 (10.0.0.20)
+  ┌──────────────────────────┐                ┌──────────────────────────┐
+  │  Pod A 10.244.1.5         │                │  Pod B 10.244.2.8         │
+  │  ┌────────────────┐      │                │  ┌────────────────┐      │
+  │  │  app 进程       │      │                │  │  app 进程       │      │
+  │  └────────┬───────┘      │                │  └────────▲───────┘      │
+  │           │                    │                       │              │
+  │  ┌────────▼───────┐      │                │  ┌────────┴───────┐      │
+  │  │ eth0           │      │                │  │ eth0           │      │
+  │  └────────┬───────┘      │                │  └────────▲───────┘      │
+  │           │                    │                       │              │
+  │           ▼                    │                       │              │
+  │  ┌────────────────────┐  │                │  ┌────────────────────┐  │
+  │  │ cilium_host       │  │                │  │ cilium_host       │  │
+  │  │ (eBPF 接管)        │  │                │  │ (eBPF 接管)        │  │
+  │  └────────┬───────────┘  │                │  └────────▲───────────┘  │
+  │           │                    │                       │              │
+  │  ┌────────▼───────────┐  │                │  ┌────────┴───────────┐  │
+  │  │ eth0 (物理网卡)   │──┼────────────────┼──│ eth0 (物理网卡)   │  │
+  │  │ 10.0.0.10         │  │   Overlay      │  │ 10.0.0.20         │  │
+  │  └────────────────────┘  │   (VXLAN/Geneve)  └────────────────────┘  │
+  └──────────────────────────┘                └──────────────────────────┘
+
+  详细流程（eBPF Overlay 路径）：
+
+  Pod A 发送包：
+    1. Pod A 应用 → send() 系统调用
+    2. eBPF sock_ops 钩子（内核态）
+       - 检查目的 IP 10.244.2.8
+       - 查询 eBPF Map（cilium_ipcache）
+       - 找到目的节点 ID = 2
+    3. eBPF sk_lookup 钩子
+       - 查询 eBPF Map（cilium_lb4）
+       - 标记为远程节点（需要 Overlay）
+    4. 数据包通过 veth 到达 cilium_host
+
+  cilium_host 上 eBPF 处理：
+    5. TC ingress 钩子（eBPF）
+       - 数据包进入 cilium_host
+       - eBPF 程序 bpf_overlay 触发
+    6. cilium-agent 检查 Overlay 配置
+       - 判断是否需要 VXLAN 封装
+       - Overlay 网络（如 ClusterwideCIDR）
+    7. eBPF 注入 VXLAN 封装
+       - 原始包：[10.244.1.5 → 10.244.2.8]
+       - 封装后：[外层 IP: 10.0.0.10 → 10.0.0.20, UDP, VXLAN, 内层包]
+    8. 封装包从 eth0 发出
+
+  物理网络传输：
+    9. eth0 发送 UDP 包
+       物理交换机/路由器
+       到达 Node 2 eth0
+
+  Node 2 处理：
+    10. eth0 接收 UDP 包
+        TC egress 钩子（eBPF）
+    11. eBPF 解封装
+        - 去掉外层 UDP/IP
+        - 提取内层 IP 包
+    12. eBPF 查路由表
+        - 10.244.2.0/24 → cilium_host（本地）
+    13. 数据包转发到 cilium_host
+    14. eBPF TC egress 钩子
+        - 查询 cilium_ipcache
+        - 找到目的 Pod 的 veth 接口
+    15. 数据包通过 veth 到达 Pod B
+
+  Pod B 接收：
+    16. Pod B 应用进程收到数据
+        完成跨节点通信
+
+  延迟分析：
+    - sock_ops 拦截：~1μs
+    - eBPF Map 查询：~0.5μs/次
+    - TC ingress：~1μs
+    - TC egress：~1μs
+    - VXLAN 封装：~5μs
+    - 物理网络：1-10ms
+    - 总延迟：~15-25μs（不含物理网络）
+
+  与 Flannel VXLAN 对比：
+    Flannel 用户态（flanneld）：~50-100μs
+    Cilium eBPF（内核态）：~10-20μs
+    性能提升：3-5 倍
+```
+
+### 5.3 eBPF 钩子点详解
+
+```text
+Cilium 使用的关键 eBPF 钩子点：
+
+  ┌────────────────────────────────────────────────┐
+  │  eBPF 钩子类型             用途                  │
+  ├────────────────────────────────────────────────┤
+  │  XDP（eXpress Data Path）网卡驱动入口          │
+  │  - 在驱动层处理数据包                        │
+  │  - 最早的处理点                                │
+  │  - 性能最优                                    │
+  │  - Cilium 用于：Service LB（XDP 模式）        │
+  ├────────────────────────────────────────────────┤
+  │  TC（Traffic Control）流量控制                │
+  │  - ingress：进入网卡                          │
+  │  - egress：离开网卡                          │
+  │  - Cilium 用于：NetworkPolicy、Overlay       │
+  ├────────────────────────────────────────────────┤
+  │  Socket Layer                                │
+  │  - sock_ops：socket 操作                     │
+  │  - Cilium 用于：connect、sendmsg 重定向      │
+  ├────────────────────────────────────────────────┤
+  │  kprobe                                        │
+  │  - 内核函数入口                                │
+  │  - Cilium 用于：高级监控                       │
+  ├────────────────────────────────────────────────┤
+  │  cgroup                                        │
+  │  - cgroup v2 hookpoint                        │
+  │  - Cilium 用于：进程级监控                     │
+  └────────────────────────────────────────────────┘
+
+  eBPF 数据包处理流程：
+
+  网卡驱动
+       │ XDP 钩子
+       ▼
+  ┌─────────────────────────┐
+  │  bpf_xdp（XDP 程序）    │ ← 最快路径
+  │  - 转发 / DROP           │
+  │  - LB                    │
+  └──────────┬──────────────┘
+             │
+             ▼
+  ┌─────────────────────────┐
+  │  TC ingress              │ ← 网络栈入口
+  │  - bpf_lxc（Pod 流量）  │
+  │  - calico 策略检查       │
+  └──────────┬──────────────┘
+             │
+             ▼
+  ┌─────────────────────────┐
+  │  IP 路由                │
+  └──────────┬──────────────┘
+             │
+             ▼
+  ┌─────────────────────────┐
+  │  TC egress               │ ← 网络栈出口
+  │  - bpf_lxc              │
+  │  - 封装 / 路由           │
+  └──────────┬──────────────┘
+             │
+             ▼
+  网卡驱动
+```
+
+### 5.4 Service 流量完整路径（eBPF）
+
+```text
+Service ClusterIP 完整路径（eBPF）：
+
+  ┌──────────────────────────────────────────────────┐
+  │  Client Pod 应用                                │
+  │  curl http://my-service:80                       │
+  └────────────────────┬─────────────────────────────┘
+                       │ 系统调用
+                       ▼
+  ┌──────────────────────────────────────────────────┐
+  │  eBPF socket 层（sock_ops）                      │
+  │  - 拦截 connect()、sendmsg()                   │
+  │  - 查询 cilium_lb4 Map                           │
+  │  - 找到 Service → 后端 Pod 映射                 │
+  │  - 选择后端 Pod（负载均衡算法）                │
+  │  - 重定向 socket 到后端 Pod                     │
+  └────────────────────┬─────────────────────────────┘
+                       │
+                       ▼
+  ┌──────────────────────────────────────────────────┐
+  │  eBPF TC egress（Pod 出口）                      │
+  │  - 应用 NetworkPolicy                          │
+  │  - 检查源 IP 和目的 IP                          │
+  └────────────────────┬─────────────────────────────┘
+                       │
+                       ▼
+  ┌──────────────────────────────────────────────────┐
+  │  直接转发到后端 Pod veth（不经 Host 协议栈）  │
+  └──────────────────────────────────────────────────┘
+
+  eBPF Service LB 关键优势：
+    - 传统 iptables 需要遍历所有规则
+    - eBPF Map 哈希查找 O(1)
+    - 1000 个 Service 时性能差异巨大
+    - iptables：~50μs P99（1000+ Service）
+    - eBPF：~5μs P99（10000+ Service）
+```
+
+### 5.5 跨节点通信 vs 同节点通信对比
+
+```text
+Cilium 两种通信路径对比：
+
+  ┌─────────────────┬──────────────────┬──────────────────┐
+  │  维度          │  同节点          │  跨节点          │
+  ├─────────────────┼──────────────────┼──────────────────┤
+  │  钩子点        │  sock_ops        │  TC ingress/     │
+  │                 │                  │  egress          │
+  │  路径          │  Pod→veth→       │  Pod→veth→       │
+  │                 │  sock_ops 拦截   │  cilium_host→   │
+  │                 │  →直接转发      │  Overlay 封装→   │
+  │                 │  Pod B veth      │  物理网络→       │
+  │                 │                  │  Node 2→解封装→ │
+  │                 │                  │  Pod B veth      │
+  │  Host 网络栈   │  跳过            │  经过            │
+  │  iptables      │  不需要          │  通过 TC eBPF    │
+  │  conntrack     │  eBPF Map 替代   │  eBPF Map 替代   │
+  │  封装          │  无              │  VXLAN/Geneve    │
+  │  性能开销      │  ~5μs          │  ~15-25μs       │
+  │  物理网络      │  不经过          │  经过            │
+  └─────────────────┴──────────────────┴──────────────────┘
+```
+
+### 5.6 Cilium Hubble 完整观测路径
+
+```text
+Cilium Hubble 观测的数据流：
+
+  Pod A 应用
+       │ 系统调用
+       ▼
+  eBPF cilium_monitor 钩子
+       │ 拦截 socket 操作
+       ▼
+  ┌─────────────────────────────────────────┐
+  │  eBPF 程序（per-CPU Map）              │
+  │  - 提取五元组（src/dst ip/port）      │
+  │  - 应用层协议解析（HTTP/gRPC）        │
+  │  - 写入 perf event ring buffer        │
+  └────────────────┬────────────────────────┘
+                   │
+                   ▼
+  ┌─────────────────────────────────────────┐
+  │  cilium-agent（Hubble Server）         │
+  │  - 订阅 perf events                    │
+  │  - 解析为 Flow log                      │
+  │  - 通过 gRPC 暴露                      │
+  └────────────────┬────────────────────────┘
+                   │
+                   ▼
+  ┌─────────────────────────────────────────┐
+  │  Hubble Relay（可选聚合器）            │
+  │  - 聚合多 cilium-agent                │
+  │  - 提供全局网络视图                    │
+  └────────────────┬────────────────────────┘
+                   │
+                   ▼
+  ┌─────────────────────────────────────────┐
+  │  Hubble UI / Hubble CLI                  │
+  │  - Web 界面                              │
+  │  - 服务地图                              │
+  │  - Flow 列表                              │
+  │  - HTTP/gRPC 详情                        │
+  │  - DNS 记录                              │
+  └─────────────────────────────────────────┘
+
+  Hubble 关键功能：
+    - 实时 L3/L4/L7 流量可视化
+    - 服务依赖图
+    - NetworkPolicy 决策日志
+    - TCP 重传统计
+    - DNS 查询记录
+```
+
+### 5.7 故障排查技巧
+
+```bash
+# 1. 查看 Cilium 整体状态
+cilium status
+
+# 2. 查看 eBPF Map
+cilium bpf ct list | head
+cilium bpf lb list | head
+cilium bpf ipcache list | head
+
+# 3. 查看 Hubble 状态
+hubble status
+
+# 4. 查看实时流量
+hubble observe
+
+# 5. 查看特定 Pod 流量
+hubble observe --namespace production --pod my-app
+
+# 6. 查看 L7 HTTP 流量
+hubble observe --protocol http
+
+# 7. 查看 DNS 查询
+hubble observe --protocol dns
+
+# 8. 查看 NetworkPolicy 决策
+hubble observe --verdict DROPPED
+
+# 9. 查看端点信息
+kubectl exec -n kube-system <cilium-pod> -- cilium endpoint list
+
+# 10. 查看服务地图
+hubble ui
+
+# 11. 抓包分析（高级）
+mount -t bpf bpf /sys/fs/bpf /sys/fs/bpf
+ls /sys/fs/bpf/tc/globals/cilium/
+```
+
+---
+
 ## 六、关键特性
 
 ### 6.1 eBPF 数据面能力
