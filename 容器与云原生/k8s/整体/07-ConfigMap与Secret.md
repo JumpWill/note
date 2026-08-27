@@ -134,6 +134,379 @@ kubectl get cm app-config -o jsonpath='{.data.db\.host}'
 
 ---
 
+## 二点五、ConfigMap 多行字符串的处理方式
+
+### 2.5.1 为什么需要关心空格和换行
+
+```text
+应用配置通常不是单行：
+  - 配置文件（nginx.conf、application.yml）
+  - 多行命令（Shell 脚本）
+  - 多行 SQL 脚本
+  - JSON 多行格式化
+  - 多行证书（CA Bundle）
+
+不同写法在 K8s 中有微妙区别，处理不当会导致：
+  - 多行变单行（配置错误）
+  - 缩进错误（语法错误）
+  - 尾部换行丢失（解析失败）
+  - 引号/转义问题
+```
+
+### 2.5.2 三种 YAML 字符串写法的根本区别
+
+```text
+YAML 提供了 4 种字符串写法（按处理逻辑排序）：
+
+┌────────┬──────────────────────┬──────────────────────────┐
+│  写法  │  YAML 类型             │  对空格/换行的处理         │
+├────────┼──────────────────────┼──────────────────────────┤
+│  plain │  scalar (plain)       │  保留原样               │
+│  "..." │  scalar (double-quoted)│  支持转义，保留换行     │
+│  '...' │  scalar (single-quoted)│  原样不转义，保留换行     │
+│  |-    │  block scalar (literal) │  保留所有换行/空格/缩进 │
+│  >     │  block scalar (folded) │  换行变空格，其他保留     │
+│  >+    │  keep (folded)         │  同 >, 但保留末尾换行     │
+│  |     │  block scalar (literal) │  同 |-                  │
+└────────┴──────────────────────┴──────────────────────────┘
+
+说明：
+  - plain（裸字符串）：多行写法会被合并为一行
+  - |-  和  | ：字面量块，保留所有换行和缩进
+  - >  和  >+：折叠块，换行符变成空格，段落重新格式化
+  - "..."：双引号字符串，支持 \n 转义
+  - '...'：单引号字符串，不支持转义，原样保留
+```
+
+### 2.5.3 |  vs |-  详解（保留 vs 去除尾换行）
+
+```yaml
+# 注意末尾的换行（- 表示去除尾换行）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm-literal-strip
+data:
+  # |-  表示保留所有换行，但去除字符串末尾的换行
+  config.conf: |-
+    [server]
+    port=8080
+    debug=true
+  # → Pod 内文件内容：
+  #   [server]<NL>port=8080<NL>debug=true
+  #   （末尾没有换行）
+
+  # |  与 |- 类似，但保留末尾换行
+  config2.conf: |
+    [server]
+    port=8080
+  # → Pod 内文件内容：
+  #   [server]<NL>port=8080<NL>
+  #   （末尾有一个换行）
+```
+
+**关键区别**：
+
+```text
+|-  字符串末尾的最后一个换行符会被去除
+|   字符串末尾的最后一个换行符会被保留
+
+实际使用建议：
+  - 大多数配置文件（nginx.conf、yaml）→ 用 |-，更精确
+  - Shell 脚本 → 看情况（需要结尾换行用 |）
+  - JSON 数据 → 用 |，保留格式
+```
+
+### 2.5.4  >  vs >+  详解（折叠 vs 保留末尾换行）
+
+```yaml
+# >  折叠块：换行变空格，段落重新格式化
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm-folded
+data:
+  # >  会把换行变成空格，段落合并
+  description: >
+    第一行
+    第二行
+    第三行
+  # → Pod 内文件内容（一行）：
+  #   第一行 第二行 第三行
+
+  # >+ 与 > 类似，但保留末尾换行
+  description2: >+
+    第一行
+    第二行
+  # → Pod 内文件内容（两行）：
+  #   第一行 第二行<NL>
+```
+
+**注意换行与空格的处理细节**：
+
+```text
+>  处理规则：
+  - 换行符 → 空格
+  - 多个空行 → 一个空格
+  - 段落之间空行 → 段落合并
+  - 末尾的换行被去除
+  - 行尾的空白被去除
+
+例：
+  text: >
+    line1
+
+    line2
+
+  实际内容："line1 line2"
+
+  对比 plain：
+  text: |
+    line1
+    line2
+  实际内容："line1\nline2"
+```
+
+### 2.5.5 引号写法（plain vs "..." vs '...'）
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm-quoted
+data:
+  # plain（裸字符串）：特殊字符可能导致 YAML 解析错误
+  # plain 必须避开 : # & * ! | > ' " % @ ` 等
+  # 不支持 \n 等转义字符
+  bad-plain: "value:with:colons"  # 需要加引号
+
+  # 双引号 "..."：支持转义字符
+  with-escapes: "line1\nline2\nline3"
+  # → Pod 内内容：
+  #   line1<NL>line2<NL>line3
+
+  # 单引号 '...'：原样保留（不转义）
+  no-escapes: 'line1\nline2'
+  # → Pod 内内容（注意 \n 是字面 2 个字符）：
+  #   line1\nline2
+```
+
+**不同引号策略对比**：
+
+```text
+┌─────────┬────────────────┬──────────────────┐
+│  写法   │  转义支持       │  适用场景         │
+├─────────┼────────────────┼──────────────────┤
+│  plain  │  不支持        │  简单无特殊字符   │
+│  "..."  │  支持全部      │  含转义/特殊字符  │
+│  '...'  │  原样保留      │  包含 \ 等字面量   │
+└─────────┴────────────────┴──────────────────┘
+```
+
+### 2.5.6 ConfigMap 实际场景对比
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  # 场景 1: nginx 配置（推荐用 |-）
+  nginx.conf: |-
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://backend;
+        }
+    }
+  # 优点：保留缩进，nginx 解析正确
+
+  # 场景 2: SQL 脚本（推荐用 |）
+  init.sql: |
+    CREATE TABLE users (
+      id INT PRIMARY KEY,
+      name VARCHAR(100)
+    );
+    INSERT INTO users VALUES (1, 'admin');
+
+  # 场景 3: JSON 字符串（推荐用 | 或 '...'）
+  config.json: |
+    {
+      "host": "db.example.com",
+      "port": 5432
+    }
+
+  # 场景 4: 一行配置（plain 即可）
+  log.level: "info"
+
+  # 场景 5: 多行但要拼接成一行（用 >）
+  summary: >
+    这是一段
+    合并成单行
+    的描述文本
+
+  # 场景 6: 含 \n 转义（用 "..."）
+  java.opts: |
+    -Xmx512m
+    -Xms256m
+```
+
+### 2.5.7 在 Pod 中使用的差异
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod
+spec:
+  containers:
+  - name: app
+    image: nginx
+    env:
+    - name: NGINX_CONFIG
+      valueFrom:
+        configMapKeyRef:
+          name: app-config
+          key: nginx.conf
+    volumeMounts:
+    - name: config
+      mountPath: /etc/nginx/nginx.conf
+      subPath: nginx.conf
+    volumes:
+    - name: config
+      configMap:
+        name: app-config
+```
+
+**关键问题**：
+
+```text
+场景 A: env 注入
+  容器内环境变量 NGINX_CONFIG 的值：
+    - 用 |- 时：保留所有换行和缩进（多行字符串）
+    - 用 > 时：换行变成空格（一行字符串）
+    - 用 plain 时：所有换行变空格
+  ⚠️ 多数 shell 不支持多行环境变量！
+
+场景 B: volumeMount 挂载
+  容器内文件 /etc/nginx/nginx.conf 的内容：
+    - 用 |- 时：保留所有换行和缩进 ✓
+    - 用 > 时：换行变空格（nginx 解析失败 ✗）
+    - 用 plain 时：所有换行变空格（nginx 解析失败 ✗）
+  ⚠️ 配置文件必须用 |- 保留原始格式！
+```
+
+### 2.5.8 选择合适的写法
+
+```text
+决策树：
+
+问：这个值会被怎么处理？
+  ├─ 作为文件挂载 → 用 |- 保留格式
+  ├─ 作为环境变量 →
+  │   ├─ 单行配置 → plain 或 "..."
+  │   └─ 多行配置 → 用文件挂载更好
+  └─ JSON 字符串 → 用 | 或 '...'
+
+最佳实践：
+  1. 多行配置（YAML、nginx.conf、SQL）→ 用 |- 
+  2. 单行配置（端口、URL）→ plain
+  3. 含特殊字符 → "..." 或 '...'
+  4. 需要保留字面 \n → '...'
+  5. 需要转义 \n → "..."
+
+常见错误：
+  ✗ 使用 >  挂载 nginx.conf（换行变空格，配置错误）
+  ✗ 使用 plain 多行配置（所有换行变空格）
+  ✗ 在 plain 中使用特殊字符 : # & * ! | > ' " % @ `
+  ✗ 忘记在末尾加换行（用 | 而非 |-）
+```
+
+### 2.5.9 在 K8s YAML 中完整示例
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-all-formats
+data:
+  # 1. plain 单行
+  appName: "my-application"
+  
+  # 2. |- 保留多行
+  nginx.conf: |-
+    user nginx;
+    worker_processes auto;
+    events {
+        worker_connections 1024;
+    }
+    http {
+        server {
+            listen 80;
+            location / {
+                return 200 'OK';
+            }
+        }
+    }
+  
+  # 3. | 保留多行 + 末尾换行
+  startup.sh: |
+    #!/bin/bash
+    echo "Starting..."
+    nginx -g 'daemon off;'
+  
+  # 4. > 折叠成单行
+  description: >
+    这是一段
+    多行描述
+    合并成一行
+  
+  # 5. >+ 折叠 + 末尾换行
+  greeting: >+
+    欢迎
+    使用 K8s
+  
+  # 6. 双引号支持转义
+  javaOpts: "Xmx512m\nXms256m"
+  
+  # 7. 单引号原样
+  regex: '^https?://.*$'
+  
+  # 8. JSON 数据
+  config.json: |
+    {
+      "name": "app",
+      "version": "1.0.0"
+    }
+```
+
+### 2.5.10 验证与调试
+
+```bash
+# 查看 ConfigMap 实际内容（YAML 格式）
+kubectl get cm app-config -o yaml
+
+# 查看特定 key
+kubectl get cm app-config -o jsonpath='{.data.nginx\.conf}' | head -5
+
+# 在 Pod 中验证（通过环境变量）
+kubectl exec -it test-pod -- env | grep NGINX_CONFIG
+
+# 在 Pod 中验证（通过文件挂载）
+kubectl exec -it test-pod -- cat /etc/nginx/nginx.conf | head -10
+
+# 常见错误排查
+# 错误：配置文件中出现 "line1 line2" 格式（换行变空格）
+# 原因：使用了 >  折叠
+# 解决：改为 |- 块标量
+
+# 错误：YAML 解析失败
+# 原因：plain 中包含特殊字符
+# 解决：加引号 "..." 或 '...'
+```
+
+---
+
 ## 三、ConfigMap 注入方式
 
 ### 3.1 方式 1:环境变量 (env)
