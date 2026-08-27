@@ -1075,7 +1075,7 @@ if queue.Len() > 10000 {
 - **关键流程**：Watch → Handler → Workqueue → Worker → Reconcile → Done
 - **List-Watch 断连处理**：重新 List 全量 + 用 RV 续接 Watch
 - **ResourceVersion (RV)** = 资源版本号 = 乐观锁
-```
+
 
 ## 一句话总结
 
