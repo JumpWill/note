@@ -427,3 +427,316 @@ spec:
 - CRD API 文档：<https://prometheus-operator.dev/docs/api-reference/>
 - kube-prometheus-stack：<https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack>
 - 升级指南：<https://prometheus-operator.dev/docs/operator/upgrade/>
+
+---
+
+## 十一、黑盒监控（Blackbox Exporter）的使用
+
+> **白盒**告诉你"应用觉得自己怎么样"（exporter 主动上报），**黑盒**告诉你"用户实际看到的怎么样"（从外部去打）。
+> 黑盒的核心是 [blackbox_exporter](https://github.com/prometheus/blackbox_exporter)：Prometheus 把目标 URL 发给它，它去探测并把结果（耗时、状态码、SSL 过期日、TLS 协议版本…）转成指标。
+
+**典型场景**：
+
+| 场景 | 用白盒还是黑盒 |
+| --- | --- |
+| Pod 内部 HTTP 500 率 | 白盒（业务 SDK 暴露 `http_requests_total`） |
+| **公网域名能不能打开** | **黑盒（HTTP 探测）** |
+| **第三方 API 是否可用** | **黑盒** |
+| 节点 TCP 端口监听 | 黑盒（TCP connect） |
+| **SSL 证书几天后过期** | **黑盒（SSL 探测）** |
+| **DNS 解析是否正确** | **黑盒（DNS）** |
+| **机房到 CDN 的网络延迟** | **黑盒（ICMP ping）** |
+
+---
+
+### 11.1 架构
+
+```
+┌─────────────────┐  /probe?module=...&target=...   ┌────────────────────┐
+│  Prometheus     │ ──────────────────────────────► │  blackbox-exporter │
+│  (通过 Probe CR)│ ◄────────────────────────────── │  (Deployment)      │
+└─────────────────┘   probe_success / duration...   └────────┬───────────┘
+                                                             │ HTTP/TCP/ICMP/DNS
+                                                             ▼
+                                                     目标服务（业务 / 第三方）
+```
+
+**关键点**：blackbox-exporter 本身**只是个探测代理**，它不抓 target；是 Prometheus 通过 Probe CR 把 target 列表 + 模块名发给它，它跑完把结果以**单个样本**返回。
+
+---
+
+### 11.2 Step 1：装 blackbox-exporter
+
+#### 方式 A：kube-prometheus-stack 自带（推荐）
+
+```yaml
+# values.yaml 覆盖
+blackboxExporter:
+  enabled: true
+  image:
+    tag: v0.25.0
+  config:
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          valid_status_codes: [200, 204]
+          method: GET
+          preferred_ip_protocol: ip4
+      http_post_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          method: POST
+      tcp_connect:
+        prober: tcp
+        timeout: 5s
+      icmp_ping:
+        prober: icmp
+        timeout: 5s
+      dns_query:
+        prober: dns
+        timeout: 5s
+        dns:
+          query_name: example.com
+      https_ssl:
+        prober: http
+        timeout: 5s
+        http:
+          method: GET
+          fail_if_ssl: false
+          fail_if_not_ssl: true
+          fail_if_body_matches_regexp: []
+```
+
+> **注意**：`http_2xx` / `tcp_connect` 这种模块名是**约定俗成**的（社区默认配置里有），自定义名也行，但 Probe CR 里要写一致。
+
+#### 方式 B：独立 chart
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm install blackbox prometheus-community/blackbox-exporter -n monitoring
+```
+
+然后自己维护 ConfigMap / 改 values.yaml 的 `config.modules`。
+
+---
+
+### 11.3 Step 2：写 `Probe` CR
+
+Probe CR 有 **4 种 target 来源**，按需选：
+
+#### ① staticConfig（最直接：固定 URL 列表）
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: external-websites
+  namespace: monitoring
+  labels:
+    release: kube-prometheus       # 给 Prometheus CR 选
+spec:
+  jobName: external-http
+  interval: 30s
+  module: http_2xx
+  targets:
+    staticConfig:
+      static:
+        - https://www.example.com
+        - https://api.example.com/health
+        - https://static.example.com/
+  metricRelabelings:               # 把 URL 提到顶层 label
+    - sourceLabels: [__address__]
+      targetLabel: target
+      replacement: ''               # 清掉黑盒 exporter 自身的地址
+    - sourceLabels: [__param_target]
+      targetLabel: target
+```
+
+#### ② ingress（自动发现 K8s Ingress 域名）
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: ingress-probe
+  namespace: monitoring
+spec:
+  jobName: ingress-http
+  interval: 30s
+  module: http_2xx
+  targets:
+    ingress:
+      namespaceSelector:
+        matchNames: [prod, staging]
+      selector:
+        matchLabels:
+          probe: enabled            # 只探测打了这个 label 的 Ingress
+      relabelingConfigs:            # 把 host 拼成 https://${host}
+        - sourceLabels: [__meta_kubernetes_ingress_host]
+          targetLabel: __address__
+          replacement: ${1}
+          regex: (.+)
+        - targetLabel: __address__
+          replacement: https://${1}
+```
+
+#### ③ endpoints（探测 K8s Service 的 Endpoint IP）
+
+适合内网探测集群内 Pod 健康，又不想走 Service 路径：
+
+```yaml
+spec:
+  jobName: pod-tcp-check
+  module: tcp_connect
+  targets:
+    endpoints:
+      namespaceSelector:
+        matchNames: [prod]
+      selector:
+        matchLabels:
+          tcp-probe: "true"
+      port: 8080
+```
+
+#### ④ staticConfig + Ingress 同时用：组合也行
+
+Probe CR 一次只能填一种 `targets`，但你可以建**多个 Probe CR** 各管一种。
+
+---
+
+### 11.4 SSL 证书过期监控（最常用的黑盒场景）
+
+#### 模块配置（黑盒 ConfigMap）
+
+```yaml
+modules:
+  http_2xx_ssl:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      fail_if_ssl: false
+      fail_if_not_ssl: true
+      tls_config:
+        insecure_skip_verify: false
+```
+
+#### Probe CR（指向公网域名）
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: prod-ssl-check
+  namespace: monitoring
+spec:
+  jobName: prod-ssl
+  interval: 5m                       # SSL 探测不需要太频繁
+  module: http_2xx_ssl
+  targets:
+    staticConfig:
+      static:
+        - https://www.example.com
+        - https://api.example.com
+        - https://pay.example.com
+```
+
+#### 关键指标
+
+```
+probe_ssl_earliest_cert_expiry    # Unix 时间戳（秒），最早过期的证书
+probe_success                     # 0/1
+probe_duration_seconds            # 探测耗时
+probe_http_status_code            # HTTP 状态码
+probe_http_ssl                    # 是否 HTTPS（1/0）
+```
+
+#### 告警规则
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: blackbox-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus
+spec:
+  groups:
+    - name: blackbox
+      rules:
+        # 探测失败
+        - alert: BlackboxProbeFailed
+          expr: probe_success == 0
+          for: 3m
+          labels: { severity: P0 }
+          annotations:
+            summary: "黑盒探测失败：{{ $labels.target }}"
+
+        # SSL 证书 14 天内过期
+        - alert: SSLCertExpiringSoon
+          expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+          for: 1h
+          labels: { severity: P1 }
+          annotations:
+            summary: "{{ $labels.target }} 证书将在 {{ $value | humanizeDuration }} 后过期"
+
+        # 探测慢（> 3s）
+        - alert: BlackboxProbeSlow
+          expr: probe_duration_seconds > 3
+          for: 5m
+          labels: { severity: P2 }
+```
+
+---
+
+### 11.5 排查清单（Probe 不生效）
+
+```bash
+# 1. Probe CR 被 Operator 接收了吗？
+kubectl get probe -A
+kubectl describe probe <name> -n monitoring
+
+# 2. Prometheus targets 页面查 job=<jobName> 的 targets
+#    应该是 blackbox-exporter 的地址，不是原始 URL
+kubectl port-forward svc/kube-prometheus-stack-prometheus 9090:9090 -n monitoring
+# 访问 http://localhost:9090/targets，搜 jobName
+
+# 3. 模块名拼错是最常见原因
+#    Probe.spec.module 必须等于 blackbox ConfigMap 里 modules 的 key
+kubectl get cm -n monitoring blackbox-exporter -o yaml
+
+# 4. 直连 blackbox-exporter 验证
+kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
+  curl "http://blackbox-exporter.monitoring:9115/probe?module=http_2xx&target=https://example.com"
+```
+
+---
+
+### 11.6 踩坑
+
+| 现象 | 原因 |
+| --- | --- |
+| Probe 创建了但 targets 为空 | `Prometheus` CR 没选这个 Probe（label 不匹配）；或 `module` 名拼错 |
+| 所有探测都失败 | blackbox-exporter **出网受限**——K8s 里默认 NetworkPolicy 不开外网，要放行 |
+| SSL 探测报"x509: certificate signed by unknown authority" | 模块没配 `tls_config` / 业务用了私有 CA——加 `insecure_skip_verify` 或塞 ca cert |
+| 探测时延高（>1s）但实际服务快 | 黑盒到目标的**网络链路**本身就慢；用 ICMP / TCP 分段定位 |
+| 黑盒 exporter OOM | `interval` 太小 × 目标太多——单实例能撑 ~500 target |
+| Probe CR 改了 spec 不生效 | 跟 ServiceMonitor 一样，改 `metadata` 不会触发 reconcile，必须改 `spec` |
+| `__param_target` label 缺失 | 升级后 schema 变化；用 `metricRelabelings` 显式提取 target |
+
+---
+
+### 11.7 最佳实践
+
+1. **目标分桶**：HTTP / TCP / ICMP 各自一个 Probe CR，别全堆一个 module
+2. **interval 不要太小**：公网探测 30s–1m 足够，**省出口带宽和省对方服务器**
+3. **target label 一定要提**：原始 `__address__` 是 blackbox-exporter 自己，把 URL/host 提出来才好写告警
+4. **SSL 探测单独 job**：间隔放宽到 5m–15m，避免频繁握手
+5. **失败告警必须有 `for`**：网络抖动很常见，`for: 3m` 起步
+6. **证书过期分级**：<7d = P0、<14d = P1、<30d = P2；让值班有梯度
+7. **目标用 ServiceMonitor 管**：稳定的目标用 Ingress/Endpoints SD（自动跟随 K8s 对象增减），临时目标用 staticConfig
+8. **业务自带的健康检查 ≠ 黑盒**：应用 `/health` 返回 200 不代表用户能访问——黑盒要从**用户视角**打
