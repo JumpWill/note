@@ -143,103 +143,433 @@ Reconcile Loop（调谐循环）：
 
 ## 三、Operator SDK 与 Kubebuilder
 
-### 3.1 工具对比
+### 3.1 工具对比与定位
 
 ```text
-┌─────────────────┬──────────────────────┐
-│  工具            │  用途                │
-├─────────────────┼──────────────────────┤
-│  Kubebuilder    │  脚手架、生成代码     │
-│  Operator SDK   │  高级特性、生命周期  │
-│  controller-     │  运行时库            │
-│  runtime         │                     │
-│  kustomize      │  部署 Operator       │
-└─────────────────┴──────────────────────┘
-
-推荐使用：
-  - 入门 → Kubebuilder
-  - 生产 → Operator SDK + Kubebuilder
+┌──────────────────┬──────────────────────────────────────────────────┐
+│ 工具             │ 职责                                            │
+├──────────────────┼──────────────────────────────────────────────────┤
+│ Kubebuilder      │ K8s 官方脚手架，生成项目骨架、CRD、Controller    │
+│                  │ 代码、Makefile、envtest、webhook 配置            │
+│ Operator SDK     │ Operator Framework 的 CLI；包装 Kubebuilder +    │
+│                  │ 提供 bundle（OLM）、scorecard、run --bundle 等   │
+│ controller-      │ Go 运行时库，封装 client / cache / workqueue /  │
+│ runtime          │ reconciler 等核心 API                         │
+│ kustomize        │ 部署 Operator / CRD / RBAC / webhook             │
+└──────────────────┴──────────────────────────────────────────────────┘
 ```
 
-### 3.2 Kubebuilder 初始化项目
+**两者的关系**（理解关键）：
+
+```text
+Operator Framework
+   │
+   ├─ Operator SDK (CLI) ── 包装 ──> Kubebuilder (CLI)
+   │                                       │
+   │                                       ▼
+   │                              controller-runtime (Go 库)
+   │
+   └─ OLM / Catalog / Scorecard  ── 与 Kubebuilder 互补 ──> 走 OperatorHub
+```
+
+- **Kubebuilder 是底座**，Operator SDK 调用它来生成代码——`operator-sdk init` 在内部基本等价于 `kubebuilder init`
+- **Operator SDK 多出的能力**：bundle 生成（走 OLM / OperatorHub）、scorecard 验证、`run --bundle` 模式
+- **没有 Operator SDK，Kubebuilder 也能独立用**，只是不能直接打包发布到 OperatorHub
+
+**生产选型**：
+
+| 场景 | 推荐 |
+| --- | --- |
+| 学习、内部 Operator、单一项目 | **Kubebuilder**（轻量、文档好） |
+| 自有 Operator + GitOps 部署 | **Kubebuilder**（不需要 OLM） |
+| 要发到 **OperatorHub** | **Operator SDK**（自动生成 bundle/CSV） |
+| 多语言 Operator（Ansible / Helm） | **Operator SDK**（Kubebuilder 只支持 Go） |
+| 已有 Helm / Ansible Chart 想快速包装成 Operator | **Operator SDK**（`--plugins=helm` / `--plugins=ansible`） |
+| Helm chart 想"声明式"管理 | **Operator SDK helm plugin**（无 controller 逻辑） |
+
+> 💡 **一句话**：Operator SDK = Kubebuilder + OLM 周边。如果不上 OperatorHub，**只用 Kubebuilder 就够了**。
+
+---
+
+### 3.2 Kubebuilder 完整使用流程
+
+#### 3.2.1 安装
 
 ```bash
-# 安装 kubebuilder
-curl -L -o kubebuilder "https://go.kubebuilder.io/latest-linux/amd64"
-chmod +x kubebuilder
-mv kubebuilder /usr/local/bin/
+# 1. 二进制安装（推荐）
+curl -L -o kubebuilder https://go.kubebuilder.io/latest/linux/amd64
+chmod +x kubebuilder && mv kubebuilder /usr/local/bin/
+kubebuilder version
 
-# 初始化项目
+# 2. macOS
+brew install kubebuilder
+
+# 3. 指定版本（生产锁定）
+curl -L -o kubebuilder https://github.com/kubernetes-sigs/kubebuilder/releases/download/v4.6.0/kubebuilder_linux_amd64
+```
+
+#### 3.2.2 初始化项目
+
+```bash
+# 1. 创建空目录
 mkdir my-operator && cd my-operator
+
+# 2. go.mod（kubebuilder init 会复用）
 go mod init github.com/example/my-operator
 
+# 3. 初始化（plugins=go/v4 是当前主流 layout）
 kubebuilder init \
   --domain example.com \
   --repo github.com/example/my-operator \
-  --project-name my-operator
-
-# 创建 API
-kubebuilder create api \
-  --group database \
-  --version v1 \
-  --kind MySQLCluster
-
-# 项目结构
-my-operator/
-├── api/
-│   └── v1/
-│       ├── groupversion_info.go
-│       └── mysqlcluster_types.go
-├── internal/controller/
-│   ├── mysqlcluster_controller.go
-│   └── suite_test.go
-├── cmd/
-│   ├── main.go
-│   └── ...
-├── config/
-│   ├── crd/
-│   │   └── bases/
-│   │       └── database.example.com_mysqlclusters.yaml
-│   ├── rbac/
-│   ├── manager/
-│   └── ...
-├── Dockerfile
-├── Makefile
-├── PROJECT
-└── go.mod
+  --project-name my-operator \
+  --plugins=go/v4
 ```
 
-### 3.3 Operator SDK 初始化（更完整）
+**init 干了啥**：
+
+| 文件 | 内容 |
+| --- | --- |
+| `PROJECT` | 项目元数据，kubebuilder 用它找类型 |
+| `Makefile` | 完整构建 / 测试 / 部署流水线（`make help` 看 target） |
+| `cmd/main.go` | Manager 入口，注册 Scheme / Reconciler / Webhook |
+| `go.mod` + `go.sum` | 加 controller-runtime、k8s.io/api 等依赖 |
+| `Dockerfile` | 多阶段构建镜像 |
+| `.gitignore` / `.dockerignore` | 忽略二进制和临时文件 |
+| `test/utils/` | envtest 工具（apiserver / etcd 路径解析） |
+
+#### 3.2.3 创建 API（CRD + Controller 骨架）
 
 ```bash
-# 安装 operator-sdk
-curl -L -o operator-sdk "https://github.com/operator-framework/operator-sdk/releases/latest/download/operator-sdk_linux_amd64"
-chmod +x operator-sdk
-mv operator-sdk /usr/local/bin/
-
-# 初始化项目
-operator-sdk init \
-  --domain example.com \
-  --repo github.com/example/my-operator \
-  --project-name my-operator \
-  --plugins go/v4
-
-# 创建 API + Controller
-operator-sdk create api \
+# 标准：创建 Kind + Resource + Controller 骨架
+kubebuilder create api \
   --group database \
   --version v1 \
   --kind MySQLCluster \
   --resource \
   --controller
+```
 
-# 启用 Webhook（可选）
-operator-sdk create webhook \
+**生成的文件**：
+
+```text
+api/v1/
+├── groupversion_info.go      # GroupVersion 注册
+├── mysqlcluster_types.go     # Spec / Status 结构体（你要改的）
+└── zz_generated.deepcopy.go   # 深拷贝（make generate 生成）
+
+internal/controller/
+├── mysqlcluster_controller.go # Reconcile 骨架（你要写的核心逻辑）
+└── suite_test.go             # envtest 入口
+```
+
+**关键 flag**：
+
+| flag | 含义 |
+| --- | --- |
+| `--resource` | 生成 Resource（不带就是只生成 type alias，业务自定义） |
+| `--controller` | 生成 Controller 骨架（不带 = 纯类型库） |
+| `--namespaced` | Namespace 范围（默认 true；CRD 是 cluster scope 时用 `--namespaced=false`） |
+| `--plural` | 自定义复数名 |
+| `--crd` | 旧版生成 CRD（v3+ 默认 true，无需手写） |
+
+#### 3.2.4 创建 Webhook
+
+```bash
+# admission webhook（defaulting + validating）
+kubebuilder create webhook \
   --group database \
   --version v1 \
   --kind MySQLCluster \
   --defaulting \
   --programmatic-validation
 ```
+
+**三种 webhook**：
+
+| 类型 | 干啥 | 实现方法 |
+| --- | --- | --- |
+| `--defaulting` | 注入默认值 | `Default(ctx, obj)` |
+| `--programmatic-validation` | 拒绝非法 CR | `ValidateCreate` / `ValidateUpdate` |
+| `--conversion` | 多版本间转换 | `ConvertTo` / `ConvertFrom` |
+
+> ⚠️ webhook 需要**证书**——`make deploy` 自动注入 cert-manager；`make run` 本地需要手动 `make webhook-cert`（v4 自带脚本）。
+
+#### 3.2.5 Kubebuilder 项目完整目录
+
+```text
+my-operator/
+├── api/                              # CRD 类型定义
+│   └── v1/
+│       ├── groupversion_info.go
+│       ├── mysqlcluster_types.go     # Spec/Status + 注解
+│       ├── mysqlcluster_webhook.go   # Webhook 实现
+│       └── zz_generated.deepcopy.go  # 自动生成
+├── cmd/
+│   └── main.go                       # Manager 入口
+├── internal/
+│   └── controller/
+│       ├── mysqlcluster_controller.go
+│       └── suite_test.go             # envtest 入口
+├── config/
+│   ├── crd/bases/                    # CRD yaml（make manifests 生成）
+│   ├── rbac/                         # role.yaml / role_binding.yaml
+│   ├── manager/                      # Deployment
+│   ├── webhook/                      # Service + MutatingWebhookConfiguration
+│   ├── samples/                      # 示例 CR yaml
+│   ├── certmanager/                  # cert-manager 证书
+│   └── default/                      # kustomize 入口
+├── test/                             # e2e 测试
+├── Dockerfile
+├── Makefile
+├── PROJECT                           # kubebuilder 元数据
+├── go.mod
+└── go.sum
+```
+
+#### 3.2.6 Kubebuilder 日常命令
+
+```bash
+# 改了注解 / 类型后必跑
+make manifests            # 重新生成 CRD / RBAC / webhook 配置
+make generate             # 重新生成深拷贝函数
+
+# 改完代码调试
+make install                  # 装 CRD 到集群（kubectl apply -f config/crd/bases/）
+make run                    # 本地跑 Operator（连 ~/.kube/config）
+
+# 跑测试
+make test                  # envtest：启 etcd + kube-apiserver，跑 controller 测试
+KUBEBUILDER_ASSETS="$(setup-envtest use 1.30.x -p path)" make test
+
+# 构建 + 部署
+make docker-build docker-push IMG=registry.example.com/my-operator:v1.0.0
+make deploy IMG=registry.example.com/my-operator:v1.0.0
+
+# 加新 CRD
+kubebuilder create api --group cache --version v1 --kind RedisCluster --resource --controller
+
+# 加 webhook
+kubebuilder create webhook --group database --version v1 --kind MySQLCluster \
+  --defaulting --programmatic-validation
+
+# 多 group（一个项目多个业务域）
+kubebuilder edit --multigroup=true
+
+# 看所有子命令
+kubebuilder help
+```
+
+#### 3.2.7 Kubebuilder 的局限（明确）
+
+| 局限 | 影响 | 解决 |
+| --- | --- | --- |
+| 不生成 OLM bundle | 无法直接上 OperatorHub | 用 Operator SDK 生成 bundle |
+| 不支持 Helm/Ansible plugin | 只能用 Go 写 | 改用 Operator SDK |
+| 不带 Ansible / Helm runtime | 不能用低代码方式写 reconcile | 同上 |
+| 部署只用 kustomize | 不支持 terraform 等 | 同上 |
+
+> 💡 **如果只需要写一个 Go Operator + 用 kustomize 部署**——**Kubebuilder 就够**，不用装 Operator SDK。
+
+---
+
+### 3.3 Operator SDK 完整使用流程
+
+#### 3.3.1 安装
+
+```bash
+# 最新 release
+curl -L -o operator-sdk \
+  https://github.com/operator-framework/operator-sdk/releases/latest/download/operator-sdk_linux_amd64
+chmod +x operator-sdk && mv operator-sdk /usr/local/bin/
+operator-sdk version
+
+# macOS
+brew install operator-sdk
+
+# 锁版本
+export OPERATOR_SDK_VERSION=v1.36.0
+curl -L -o operator-sdk \
+  https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64
+```
+
+#### 3.3.2 初始化项目
+
+```bash
+# Go plugin（最常用，等价于 kubebuilder init）
+operator-sdk init \
+  --domain example.com \
+  --repo github.com/example/my-operator \
+  --project-name my-operator \
+  --plugins=go/v4
+
+# Helm plugin（把 Helm chart 包成 Operator）
+operator-sdk init \
+  --plugins=helm \
+  --helm-chart=./my-chart \
+  --domain example.com
+
+# Ansible plugin（Ansible playbook 包成 Operator）
+operator-sdk init \
+  --plugins=ansible \
+  --ansible-collection-path=./ansible-operator
+```
+
+**三种 plugin 对比**：
+
+| plugin | 写 reconcile 的方式 | 适用 |
+| --- | --- | --- |
+| `go/v4` | Go 代码（controller-runtime） | 复杂业务逻辑 |
+| `helm` | Helm chart + values 映射到 spec | 已有 Helm chart，复用 |
+| `ansible` | Ansible playbook | 运维团队熟悉 Ansible |
+
+#### 3.3.3 创建 API + Controller
+
+```bash
+# Go plugin（与 kubebuilder create api 等价）
+operator-sdk create api \
+  --group database \
+  --version v1 \
+  --kind MySQLCluster \
+  --resource \
+  --controller
+```
+
+#### 3.3.4 创建 Webhook
+
+```bash
+operator-sdk create webhook \
+  --group database --version v1 --kind MySQLCluster \
+  --defaulting --programmatic-validation
+```
+
+#### 3.3.5 创建 bundle（⭐ Operator SDK 独有的能力）
+
+```bash
+# 生成 OLM bundle（CSV + CRD + 部署清单打包）
+make bundle
+
+# 输出在 bundle/ 目录
+#   bundle/manifests/
+#     my-operator.clusterserviceversion.yaml
+#     database.example.com_mysqlclusters.yaml
+#   bundle/metadata/
+#     annotations.yaml
+#   bundle.Dockerfile
+
+# 用 opm / podman 构建 bundle 镜像
+make bundle-build BUNDLE_IMG=registry.example.com/my-operator-bundle:v1.0.0
+make bundle-push BUNDLE_IMG=registry.example.com/my-operator-bundle:v1.0.0
+
+# 在本地跑 bundle（验证）
+operator-sdk run bundle registry.example.com/my-operator-bundle:v1.0.0 \
+  --namespace my-operator-system \
+  --install-mode OwnNamespace
+
+# 卸载
+operator-sdk cleanup my-operator
+```
+
+#### 3.3.6 Scorecard（Operator SDK 独有）
+
+对 bundle 做合规 + 功能测试：
+
+```bash
+operator-sdk scorecard \
+  --bundle=registry.example.com/my-operator-bundle:v1.0.0 \
+  --selector=core=example.com/v1,name=mysql-operator \
+  --output=text
+```
+
+#### 3.3.7 完整生命周期
+
+```bash
+# 1. 初始化
+operator-sdk init --domain example.com --repo github.com/example/foo --plugins=go/v4
+
+# 2. 创建 CRD
+operator-sdk create api --group app --version v1 --kind Foo --resource --controller
+
+# 3. 写 Spec/Status + Reconcile
+# （手动写 api/v1/foo_types.go + internal/controller/foo_controller.go）
+
+# 4. 生成代码 + 测试
+make manifests generate fmt vet
+make test
+
+# 5. 构建 Operator 镜像
+make docker-build docker-push IMG=registry.example.com/foo:v1.0.0
+
+# 6. 生成 OLM bundle（要发 OperatorHub 必走）
+make bundle
+make bundle-build bundle-push BUNDLE_IMG=registry.example.com/foo-bundle:v1.0.0
+
+# 7. 部署
+make deploy IMG=registry.example.com/foo:v1.0.0
+# 或在 OperatorHub 上传 bundle 后通过 catalog 安装
+
+# 8. 验证
+operator-sdk scorecard --bundle=...
+```
+
+#### 3.3.8 Operator SDK 独有的工具命令
+
+| 命令 | 干啥 | |
+| --- | --- | --- |
+| `operator-sdk bundle` | 把现有部署清单打包成 OLM bundle | |
+| `operator-sdk run bundle` | 本地装 bundle（替代 `make deploy`） | |
+| `operator-sdk cleanup` | 卸载 bundle 部署的 Operator | |
+| `operator-sdk scorecard` | bundle 合规 + e2e 测试 | |
+| `operator-sdk generate` | 同 `kubebuilder create api` 的封装 | |
+| `operator-sdk print-verbs` | 列出 Operator 用到的 K8s API 资源 | |
+| `operator-sdk new-project` | 快速模板（含 git init、README 等） | |
+
+---
+
+### 3.4 选 Kubebuilder 还是 Operator SDK？
+
+**两个核心问题**：
+
+```text
+Q1: 要发到 OperatorHub 吗？
+    ├─ 是 → Operator SDK（生成 bundle/CSV）
+    └─ 否 → Kubebuilder（足够）
+
+Q2: 要用 Helm chart 或 Ansible 写 reconcile 吗？
+    ├─ 是 → Operator SDK（helm / ansible plugin）
+    └─ 否 → 都可以，Kubebuilder 更轻
+```
+
+**最常见的选择**：
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ 内部 Operator / 自研 CRD + GitOps 部署                       │
+│     → 用 Kubebuilder（仅 Go）                               │
+│                                                              │
+│ 内部 Operator，但要打包给别人用 / 要走 OperatorHub            │
+│     → 用 Operator SDK（生成 bundle）                         │
+│                                                              │
+│ 已有 Helm chart，想快速包装                                  │
+│     → 用 Operator SDK + helm plugin                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+> **底层代码 100% 一样**——生成的 controller-runtime 代码、CRD yaml、Makefile 全都通用。
+> 切换工具不需要重写代码，只是不再生成 Operator SDK 特有的辅助文件。
+
+#### 3.4.1 关键事实
+
+- **Operator SDK 1.30+ 已经把脚手架部分全面外包给 Kubebuilder**——`operator-sdk init` 在底层调用 `kubebuilder init`
+- **生成的 Go 代码、controller-runtime 依赖、Makefile 完全一致**
+- **Operator SDK 唯一独有的**：bundle / CSV / scorecard / run --bundle
+- **Kubebuilder 唯一独有的**：更轻的 CLI、`edit --multigroup` 用得更顺手
+
+#### 3.4.2 推荐生产实践
+
+1. **先用 Kubebuilder 起项目**，脚手架阶段保持简单
+2. **要发布给外部用户**时再 `make bundle`（bundle 生成不需要 Operator SDK CLI，`make bundle` 用 kustomize + sed 拼 CSV）
+3. **要在 OperatorHub 上架**才需要 Operator SDK CLI 做 scorecard + catalog 提交
+4. **Ansible / Helm plugin** 只在已有 chart/ playbook 时用
 
 ---
 
@@ -1267,3 +1597,418 @@ kubectl apply -f cr.yaml
 # → K8s 资源创建
 # → status 更新
 ```
+
+---
+
+## 十一、Kubebuilder 命令速查与端到端开发流程
+
+> 把散落在各节的 `kubebuilder` / `make` 命令汇总到一处，按**实际开发顺序**串成一条流水线。
+> 本节读完 = 拿到一个完整 Operator 的工程流程图。
+
+### 11.1 Kubebuilder 子命令速查（`kubebuilder --help`）
+
+| 子命令 | 干啥 | 关键 flag |
+| --- | --- | --- |
+| `init` | 初始化项目（生成 go.mod / Makefile / PROJECT） | `--domain`、`--repo`、`--project-name`、`--plugins=go/v4` |
+| `create api` | 创建 CRD 类型 + Controller 骨架 | `--group`、`--version`、`--kind`、`--resource`、`--controller` |
+| `create webhook` | 给已有 Kind 加 webhook | `--defaulting`、`--programmatic-validation`、`--conversion` |
+| `create config` | 不常用，多用于 bundle/OLM | `--name`、`--namespace` |
+| `edit` | 修改 PROJECT 配置（多 group / 多版本） | `--multigroup` |
+| `alpha` | 实验性（生成 envtest 等） | — |
+
+**完整骨架示例**（一次性生成多 CRD）：
+
+```bash
+# 1. 项目初始化（go/v4 plugin = controller-runtime 最新）
+kubebuilder init \
+  --domain example.com \
+  --repo github.com/example/my-operator \
+  --plugins=go/v4
+
+# 2. 启用多 group（一个项目多个业务域）
+kubebuilder edit --multigroup=true
+
+# 3. 生成 API（resource=true 才有 status subresource；controller=true 才生成 controller 骨架）
+kubebuilder create api \
+  --group database \
+  --version v1 \
+  --kind MySQLCluster \
+  --resource \
+  --controller
+
+# 4. 多个 CRD
+kubebuilder create api --group cache --version v1 --kind Redis --resource --controller
+kubebuilder create api --group queue --version v1 --kind Kafka --resource --controller
+
+# 5. 加 webhook
+kubebuilder create webhook \
+  --group database --version v1 --kind MySQLCluster \
+  --defaulting --programmatic-validation
+
+# 6. 多版本时加 conversion webhook
+kubebuilder create webhook \
+  --group database --version v1beta1 --kind MySQLCluster \
+  --conversion
+```
+
+---
+
+### 11.2 Make 命令清单（kubebuilder 生成的标准 Makefile）
+
+`init` 后项目自带 `make help` 看所有 target。**最常用的 12 个**：
+
+| 命令 | 干啥 | 何时用 |
+| --- | --- | --- |
+| `make manifests` | **生成 CRD / RBAC / webhook 配置** | 改 `+kubebuilder:` 注解 后必跑 |
+| `make generate` | 生成 `zz_generated_deepcopy.go`（CRD 类型深拷贝） | 改 Go 类型后必跑 |
+| `make fmt vet` | go fmt + go vet | 提交前 |
+| `make test` | **单元 / envtest 测试** | CI、本地验证 |
+| `make build` | 编译成二进制 | — |
+| `make docker-build` | 打镜像 | `IMG=xxx` tag` |
+| `make docker-push` | 推镜像 | `IMG=xxx` |
+| `make deploy` | **用 kustomize 部署 Operator 到集群** | `IMG=xxx`（同时改镜像 + apply） |
+| `make undeploy` | 卸载 Operator（**CRD 不删**） | 回滚 |
+| `make install` | **只装 CRD**（不部署 Operator） | 调试 CRD / 跑 e2e 前 |
+| `make uninstall` | 删 CRD | 清环境（**会删 CRD 下的所有 CR 实例**） |
+| `make run` | **本地运行 Operator**（连真实集群） | 开发期热调试 |
+
+**核心流水线**（改完代码到上线的最短路径）：
+
+```bash
+# 编辑完代码
+make manifests generate fmt vet
+make test
+make docker-build docker-push IMG=registry.example.com/my-operator:dev
+make deploy IMG=registry.example.com/my-operator:dev
+```
+
+---
+
+### 11.3 端到端开发流程（从零到生产）
+
+```text
+┌──────────────┐
+│ 0. 准备环境   │  Go 1.21+ / Docker / kubectl / envtest
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 1. 项目初始化   │  kubebuilder init
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 2. 设计 API    │  api/v1/<kind>_types.go（Spec / Status / 注解）
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 3. 生成代码    │  make manifests generate
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 4. 写 Reconcile│  internal/controller/<kind>_controller.go
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 5. 本地调试    │  make install && make run
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 6. 加测试      │  *_test.go（envtest）+ suite_test.go
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 7. 加 Webhook │  kubebuilder create webhook → 改 *_webhook.go
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 8. 构建+部署   │  make docker-build/push / deploy
+└──────┬───────┘
+       ▼
+┌──────────────┐
+│ 9. 生产化       │  Leader Election / RBAC / Metrics / 监控 / OLM bundle
+└──────────────┘
+```
+
+#### 阶段 0：环境准备
+
+```bash
+# Go
+go version           # ≥ 1.21
+# Kubebuilder（手动装）
+curl -L -o kubebuilder https://go.kubebuilder.io/latest/linux/amd64
+chmod +x kubebuilder && mv kubebuilder /usr/local/bin/
+
+# envtest 依赖（make test 用）
+# 自动下载 kubebuilder 的 etcd / kube-apiserver 二进制到 ~/.local/share/kubebuilder-envtest
+export KUBEBUILDER_ASSETS="$(setup-envtest use 2.15.x -p path)"
+
+# Operator SDK（可选，做 bundle/OLM 时才用）
+curl -L -o operator-sdk \
+  https://github.com/operator-framework/operator-sdk/releases/latest/download/operator-sdk_linux_amd64
+chmod +x operator-sdk && mv operator-sdk /usr/local/bin/
+```
+
+#### 阶段 1：项目初始化
+
+```bash
+mkdir my-operator && cd my-operator
+go mod init github.com/example/my-operator
+
+kubebuilder init \
+  --domain example.com \
+  --repo github.com/example/my-operator \
+  --plugins=go/v4 \
+  --skip-go-version-check
+```
+
+生成的关键文件：`PROJECT`（项目元数据）、`Makefile`、`cmd/main.go`、`go.mod`。
+
+#### 阶段 2：定义 API（types.go）
+
+参见上文 **四、4.1** 的 MySQLCluster 示例。要点：
+
+- Spec = 用户期望，Status = 实际状态（加 `+kubebuilder:subresource:status`）
+- 必填不加 `omitempty`，可选字段用指针或 `omitempty`
+- **核心注解**（写完后 `make manifests` 生成 CRD yaml）：
+
+| 注解 | 作用 |
+| --- | --- |
+| `+kubebuilder:object:root=true` | 标记 Root 类型 |
+| `+kubebuilder:subresource:status` | 启用 status 子资源（spec/status 独立更新） |
+| `+kubebuilder:subresource:scale` | 启用 scale 子资源（让 `kubectl scale` 工作） |
+| `+kubebuilder:printcolumn` | `kubectl get` 多列展示 |
+| `+kubebuilder:validation:...` | OpenAPI v3 schema 校验（required / pattern / enum / Maximum…） |
+| `+kubebuilder:default:=` | 字段默认值 |
+
+```go
+// 注解示例
+type MySQLClusterSpec struct {
+    // +kubebuilder:validation:Required
+    // +kubebuilder:validation:Enum=5.7;8.0
+    Version string `json:"version"`
+
+    // +kubebuilder:default:=3
+    // +kubebuilder:validation:Minimum=1
+    // +kubebuilder:validation:Maximum=10
+    Replicas *int32 `json:"replicas,omitempty"`
+```
+
+#### 阶段 3：生成代码
+
+```bash
+make manifests    # → config/crd/bases/*.yaml
+make generate     # → api/v1/zz_generated_deepcopy.go
+```
+
+**`make manifests` 后**检查 `config/crd/bases/` 下的 CRD 文件，确认字段、validation、printcolumn 都对。
+
+#### 阶段 4：写 Reconcile 逻辑
+
+参见上文 **四、4.3** 的完整示例。骨架套路：
+
+```go
+func (r *MyKindReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    // 1. Get CR（找不到就忽略）
+    obj := &MyKind{}
+    if err := r.Get(ctx, req.NamespacedName, obj); err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+
+    // 2. 处理删除（finalizer）
+    if !obj.DeletionTimestamp.IsZero() {
+        return r.reconcileDelete(ctx, obj)
+    }
+
+    // 3. 加 finalizer（首次）
+    if !controllerutil.ContainsFinalizer(obj, finalizerName) {
+        controllerutil.AddFinalizer(obj, finalizerName)
+        return ctrl.Result{}, r.Update(ctx, obj)
+    }
+
+    // 4. 调谐子资源（StatefulSet / Service / ConfigMap / Secret ...）
+    //    每个子资源独立小函数，幂等（不存在就建，存在就 patch）
+    //    SetControllerReference 设 owner
+    if err := r.reconcileXxx(ctx, obj); err != nil {
+        return ctrl.Result{}, err        // 失败会重试
+    }
+
+    // 5. 更新 status
+    if err := r.updateStatus(ctx, obj); err != nil {
+        return ctrl.Result{}, err
+    }
+
+    // 6. 定期 reconcile（兜底，事件驱动之外的同步）
+    return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+```
+
+**SetupWithManager 的关键选项**：
+
+```go
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+    return ctrl.NewControllerManagedBy(mgr).
+        For(&MyKind{}).                            // 主 CR
+        Owns(&appsv1.StatefulSet{}).               // 自动 watch owner 资源
+        Owns(&corev1.Service{}).
+        WithOptions(controller.Options{
+            MaxConcurrentReconciles: 5,            // 并发上限
+            RateLimiter: workqueue.NewItemExponentialFailureRateLimiter(
+                5*time.Millisecond, 1000*time.Second),  // 指数退避
+            RecoverPanic: ptr.To(true),             // panic 自愈
+        }).
+        Complete(r)
+}
+```
+
+#### 阶段 5：本地调试（最快反馈循环）
+
+```bash
+# 一次性：装 CRD 到目标集群
+make install
+
+# 起 Operator（连 ~/.kube/config 指向的集群，热加载代码）
+make run
+
+# 另开终端：apply 一个 CR 看效果
+kubectl apply -f config/samples/database_v1_mysqlcluster.yaml
+
+# 看日志（实时）
+kubectl logs -n my-operator-system deploy/my-operator-controller-manager -f
+
+# 强制重 reconcile（更新 annotation）
+kubectl annotate mysqlcluster my-db force-reconcile=$(date +%s)
+
+# 改完代码 → Ctrl-C → make run 重新起
+```
+
+#### 阶段 6：测试
+
+```bash
+# 跑全套（envtest 起真实 etcd + kube-apiserver）
+make test
+
+# 只跑某个测试
+go test ./internal/controller/... -run TestMySQLCluster -v
+
+# 覆盖率
+go test ./... -coverprofile=cover.out
+go tool cover -html=cover.out
+```
+
+#### 阶段 7：加 Webhook
+
+```bash
+kubebuilder create webhook \
+  --group database --version v1 --kind MySQLCluster \
+  --defaulting --programmatic-validation
+# 生成 api/v1/mysqlcluster_webhook.go
+```
+
+**关键修改点**：
+
+- `api/v1/<kind>_webhook.go` 里实现 `Default()` / `ValidateCreate()` / `ValidateUpdate()`
+- `cmd/main.go` 里注册 webhook（`SetupWebhookWithManager`）
+- **webhook 需要证书**：`make deploy` 自动签发；本地跑 `make run` 需要手动：
+
+```bash
+# 本地 webhook 证书（开发用）
+make manifests
+kustomize build config/default > /tmp/webhook.yaml
+# 或用 cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+```
+
+#### 阶段 8：构建 + 部署
+
+```bash
+# 一行流水线
+make manifests generate fmt vet \
+  && make docker-build docker-push IMG=registry.example.com/my-operator:v1.0.0 \
+  && make deploy IMG=registry.example.com/my-operator:v1.0.0
+
+# 验证部署
+kubectl get pods -n my-operator-system
+kubectl get crd | grep example.com
+```
+
+#### 阶段 9：生产化
+
+```bash
+# 1. 多副本 + Leader Election（已默认开）
+#    config/manager/manager.yaml 里 replicas: 2 + --leader-elect
+
+# 2. Metrics（默认 :8080 暴露）
+kubectl port-forward -n my-operator-system svc/my-operator-controller-manager-metrics 8080:8080
+curl http://localhost:8080/metrics | grep controller_runtime_reconcile_total
+
+# 3. 加 ServiceMonitor（给 Prometheus Operator）
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: my-operator
+  namespace: my-operator-system
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  endpoints:
+    - port: metrics
+
+# 4. 升级流程（每次发版）
+make manifests  # CRD 改了要跑
+make deploy IMG=...:v1.1.0
+```
+
+---
+
+### 11.4 常见任务流（速查）
+
+| 任务 | 操作 |
+| --- | --- |
+| 加一个字段 | 改 `types.go` → `make manifests generate` |
+| 加一个 CRD | `kubebuilder create api --group ... --version v1 --kind Xxx --resource --controller` |
+| 加 webhook | `kubebuilder create webhook --group ... --version v1 --kind Xxx --defaulting --programmatic-validation` |
+| 加 RBAC 权限 | 在 controller 文件里加 `// +kubebuilder:rbac:groups=...,resources=...,verbs=...` → `make manifests` |
+| 加业务监控指标 | 在 reconcile 里用 `ctrl.Log.WithValues()` + 暴露到 metrics endpoint |
+| 加 finalizer | `controllerutil.AddFinalizer(obj, finalizerName)` + `reconcileDelete` |
+| 多版本 CRD | `kubebuilder create api --version v1beta1 ...` + 写 conversion webhook |
+| 升级 Operator 镜像 | 改 `Makefile` 的 `IMG` → `make docker-build docker-push deploy` |
+| 清理本地集群的 CRD | `make uninstall`（**慎用，会删所有实例**） |
+| 本地热加载改 Go 代码 | Ctrl-C + `make run`（controller-runtime 支持 manager 内重启某些组件，但多数情况需重启进程） |
+| 看 Operator 内部 metric | `make run` 起后访问 `:8080/metrics` |
+| 加 e2e 测试 | 在 `test/e2e/` 写 Kind 集群 + Ginkgo 用例；`make test-e2e` 跑 |
+
+---
+
+### 11.5 关键文件 / 目录对照表
+
+| 路径 | 内容 | 谁改 |
+| --- | --- | --- |
+| `api/v1/<kind>_types.go` | CRD Spec / Status 定义 + 注解 | **人**（业务定义） |
+| `api/v1/zz_generated_deepcopy.go` | 深拷贝函数 | **自动**（`make generate`） |
+| `internal/controller/<kind>_controller.go` | Reconcile 主逻辑 | **人**（核心逻辑） |
+| `internal/controller/suite_test.go` | envtest 入口 | **自动**（脚手架），人补用例 |
+| `config/crd/bases/*.yaml` | CRD 定义 | **自动**（`make manifests`） |
+| `config/rbac/role.yaml` | Operator 需要的 RBAC 权限 | **自动**（`make manifests`） |
+| `config/manager/manager.yaml` | Operator Deployment | **自动** + 人改（镜像 tag、replicas） |
+| `config/webhook/...` | Webhook 配置 | **自动** |
+| `cmd/main.go` | 入口（注册 Scheme / Reconciler / Webhook） | **人**（按需补） |
+| `Makefile` | 流水线 | **自动**（脚手架），人改 IMG 等变量 |
+| `PROJECT` | Kubebuilder 项目元数据 | **自动**（被 `kubebuilder edit` 改） |
+| `bundle/` | OLM bundle（生成 OperatorHub 订阅资源） | **自动**（`make bundle`） |
+
+---
+
+### 11.6 常见坑（命令相关）
+
+| 现象 | 原因 / 解决 |
+| --- | --- |
+| `make manifests` 改了字段没生效 | 没装 controller-gen；或 `Makefile` 里 `CONTROLLER_TOOLS_VERSION` 太旧 |
+| `make generate` 报 `cannot find type X` | 注解写错（`+kubebuilder:object:root=true` 漏了） |
+| `make test` 失败：`kubebuilder-envtest` 找不到 | `export KUBEBUILDER_ASSETS=...` |
+| `make deploy` 找不到镜像 | 仓库没登录：`docker login registry.example.com` |
+| Webhook 不生效 | 证书问题；查 `kubectl get mutatingwebhookconfiguration` |
+| 升级 CRD schema 后老 CR 不能改 | 加 conversion webhook；或老 CR 重写 |
+| `make run` 跑不起来 | RBAC 缺；用 `make deploy` 部署后看日志 |
+| Operator watch 不触发 | `Owns()` 漏了关联资源；或 owner reference 没设 |
+| 改了 CR 字段名，apply 报错 | **字段名变更是 breaking change**——只能新版本 + conversion |
+| Controller OOM | `MaxConcurrentReconciles` 太大；或 reconcile 内同步 IO 多 |
