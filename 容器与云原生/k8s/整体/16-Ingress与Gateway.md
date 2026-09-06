@@ -440,16 +440,71 @@ spec:
               number: 80
 ```
 
-### 4.3 灰度发布 (Canary)
+### 4.3 灰度发布 (Canary) —— 真实灰度全流程
+
+> **核心模型**：同一域名跑两个独立的 Deployment + Service（`myapp-stable` 和 `myapp-canary`），靠 canary-weight 切流量。
+> 网上很多示例只贴两份 yaml，**没说完整流程怎么走**——下面是从 v1 切到 v2 的端到端实操。
+
+#### 4.3.1 两个 Deployment + 两个 Service 起步
 
 ```yaml
-# 主版本 (90% 流量)
+# 主版本（v1）—— 副本数 = 生产正常值，比如 5
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-stable
+spec:
+  replicas: 1                              # 灰度时先压到最小
+  selector: { matchLabels: { app: myapp, track: stable } }
+  template:
+    metadata:
+      labels: { app: myapp, track: stable }
+    spec:
+      containers:
+        - name: myapp
+          image: myapp:v1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-stable
+spec:
+  selector: { app: myapp, track: stable }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+# 灰度版本（v2）—— 副本数要多一点，才能扛住生产流量
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-canary
+spec:
+  replicas: 4                              # 必须 ≥ 常态副本数（灰度跑满时这批 Pod 全接流量）
+  selector: { matchLabels: { app: myapp, track: canary } }
+  template:
+    metadata:
+      labels: { app: myapp, track: canary }
+    spec:
+      containers:
+        - name: myapp
+          image: myapp:v2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-canary
+spec:
+  selector: { app: myapp, track: canary }
+  ports: [{ port: 80, targetPort: 8080 }]
+```
+
+#### 4.3.2 两个 Ingress —— 一个主，一个 canary
+
+```yaml
+# 主 Ingress（吃默认流量）
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: web-v1
-  annotations:
-    nginx.ingress.kubernetes.io/canary-weight: "90"
+  name: myapp
 spec:
   rules:
   - host: app.example.com
@@ -458,20 +513,17 @@ spec:
       - path: /
         pathType: Prefix
         backend:
-          service:
-            name: web-v1
-            port:
-              number: 80
+          service: { name: myapp-stable, port: { number: 80 } }
 
 ---
-# 新版本 (10% 流量)
+# Canary Ingress —— 加 canary: "true" 标记
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: web-v2
+  name: myapp-canary
   annotations:
-    nginx.ingress.kubernetes.com/canary: "true"
-    nginx.ingress.kubernetes.io/canary-weight: "10"
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "10"     # ← canary 拿 10%
 spec:
   rules:
   - host: app.example.com
@@ -480,11 +532,142 @@ spec:
       - path: /
         pathType: Prefix
         backend:
-          service:
-            name: web-v2
-            port:
-              number: 80
+          service: { name: myapp-canary, port: { number: 80 } }
 ```
+
+#### 4.3.3 关键认知：`canary-weight` 是**单值**语义
+
+```text
+nginx.ingress.kubernetes.io/canary-weight: N
+   └─ 含义：canary 拿 N%；old（主 Ingress）自动拿 (100 - N)%
+
+所以**只改这一个数字**，不需要同时改两边：
+
+  canary-weight: 10   →  old 90%   canary 10%
+  canary-weight: 30   →  old 70%   canary 30%
+  canary-weight: 70   →  old 30%   canary 70%
+  canary-weight: 100  →  old 0%    canary 100%
+```
+
+#### 4.3.4 完整四阶段流程
+
+```text
+阶段一：真实灰度（v1 vs v2，版本不同，要慢）
+  canary-weight: 10 → 30 → 70 → 100    小步观察，每次留 5–15 min 看监控
+
+阶段二：趁 canary 满流时更新 old 镜像（v1 → v2）
+  此时 old 零流量，更新零风险（用户访问的全是 canary Pod）
+  set image + scale up old（接下来 old 要扛全量）
+
+阶段三：流量回迁（v2 vs v2，版本相同）
+  canary-weight: 100 → 0                一步到位（同版本零风险）
+
+阶段四：清理
+  先删 canary Ingress → 再删 canary Service → 最后删 canary Deployment
+  ⚠️ 顺序反了会瞬间 502
+```
+
+##### 阶段一：小步推进
+
+```bash
+# 每步观察 5–15 分钟，看错误率 / P99 / Pod 状态
+kubectl annotate ingress myapp-canary -n prod \
+  nginx.ingress.kubernetes.io/canary-weight=10 --overwrite
+
+# 监控观察
+watch 'kubectl get pods -n prod -l track=canary'
+curl -s -o /dev/null -w "%{http_code}\n" https://app.example.com/
+```
+
+**节奏参考**：
+
+| 阶段 | 权重 | 观察时长 | 关注指标 |
+| --- | --- | --- | --- |
+| 1 | 10% | 10 min | canary Pod 错误率、内存 |
+| 2 | 30% | 15 min | 整体 P99 是否恶化 |
+| 3 | 70% | 20 min | DB / Redis 等下游扛不扛得住 |
+| 4 | 100% | 30 min | 全量压测，类似生产环境 |
+
+##### 阶段二：趁零流量更新 old（⭐ 核心技巧）
+
+```bash
+# canary 已经 100% 流量的瞬间，old 零流量，趁机更新镜像
+kubectl set image deployment/myapp-stable myapp=myapp:v2 -n prod
+
+# old 副本数从 1 扩到 5（要扛住接下来的全量流量）
+kubectl scale deployment/myapp-stable -n prod --replicas=5
+
+# 滚动结束前，集群里会短暂同时存在：
+#   1 个 v1 old Pod（零流量）+ 4 个 v2 canary Pod
+# + 5 个 v2 old Pod（滚动中的新副本）
+# = 9–10 个 Pod 资源峰值
+```
+
+**为什么这一步关键**：
+
+> 整个方案的核心思路是：**用 canary 的 100% 流量掩护 old 的镜像更新**。
+> 否则直接在 old 上 set image v1→v2 会触发滚动替换，期间新旧 Pod 并存——大部分流量打到老 Pod 上，新版本实际验证覆盖率不到 100%。
+> 借 canary 满流的窗口更新 old，**保证切换后用户访问的是 100% 新版本**。
+
+##### 阶段三：流量回迁（同版本 → 一步到位）
+
+```bash
+# 此时 old 已经是 v2，跟 canary 完全同版本——切流量零风险
+kubectl annotate ingress myapp-canary -n prod \
+  nginx.ingress.kubernetes.io/canary-weight=0 --overwrite
+
+# 一行回迁完成，不需要 100→70→30→0 慢慢降
+```
+
+**判断标准**：
+
+```text
+版本不同（v1 vs v2）→ 必须小步 + 观察
+版本相同（v2 vs v2）→ 直接切，零风险
+```
+
+##### 阶段四：清理（顺序关键）
+
+```bash
+# 1. 先删 canary Ingress（立刻让 canary 零流量、old 100%）
+kubectl delete ingress myapp-canary -n prod
+
+# 2. 再删 canary Service
+kubectl delete service myapp-canary -n prod
+
+# 3. 最后删 canary Deployment（释放 Pod）
+kubectl delete deployment myapp-canary -n prod
+
+# 4. 顺手清理旧的稳定 Ingress（如果当时写了两个版本的话）
+# kubectl apply -f myapp-stable-only.yaml
+```
+
+⚠️ **顺序反了 = 502**：
+
+- 删 Deployment → Ingress 还在 → 流量找不到 Pod → 502
+- 删 Service → Ingress 还在 → 同上
+
+#### 4.3.5 资源峰值预警
+
+**假设**：生产常态副本数 = 5。
+
+| 阶段 | Pod 数（old + canary） | 说明 |
+| --- | --- | --- |
+| 灰度中（old 90% / canary 10%） | 1 + 4 = **5** | 跟常态持平 |
+| ① canary 推满 100% | 1 + 4 = **5** | old 零流量 |
+| ② old 滚动更新 + scale 5 | 1–5 + 4 = **9（峰值）** | 新旧 Pod 短暂并存 |
+| ③ 流量回迁完成 | 5 + 4 = **9** | 同版本，安全 |
+| ④ 摘 Ingress + 删 Deployment | 5 = **5** | 回到常态 |
+
+> ⚠️ **峰值 = 9 个 Pod**，比常态多 80%。
+> 收敛前**确认节点资源够**，否则 old 扩容会卡 `Pending`、整个流程断在阶段二。
+> 节点资源紧张时：**先 scale down canary 到最小**（比如 2），再扩 old——把峰值压到 5+2=7。
+
+#### 4.3.6 一句话总结
+
+> **真实灰度（不同版本，小步慢走）→ 趁 canary 满流时更新 old（零风险）→ 同版本一步回迁 → 先删 Ingress 再删 Svc/Deploy**
+
+---
 
 ### 4.4 基于 Header 的灰度
 
@@ -806,8 +989,9 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/do
 ### 灰度发布 (Canary)
 
 ```yaml
-# 按权重
-nginx.ingress.kubernetes.io/canary-weight: "10"  # 10% 流量
+# 按权重（canary 拿 N%，old 自动 = 100 - N%）
+nginx.ingress.kubernetes.io/canary: "true"
+nginx.ingress.kubernetes.io/canary-weight: "10"          # 10% 切到 canary
 
 # 按 Header
 nginx.ingress.kubernetes.io/canary-by-header: "X-Canary"
@@ -815,6 +999,19 @@ nginx.ingress.kubernetes.io/canary-by-header-value: "true"
 
 # 按 Cookie
 nginx.ingress.kubernetes.io/canary-by-cookie: "version"
+```
+
+```text
+真实灰度四阶段：
+  ① 真实灰度（v1 vs v2，小步：10 → 30 → 70 → 100）
+  ② 趁 canary 满流更新 old（v1 → v2，零风险）+ scale up old
+  ③ 流量回迁（v2 vs v2 同版本，一步到位 100 → 0）
+  ④ 先删 Ingress → 再删 Service → 最后删 Deployment
+
+⚠️ canary-weight 是单值语义，只改一边
+⚠️ 副本数不会随流量自动扩，必须手动 set image + scale
+⚠️ 资源峰值 = 常态 + 灰度 + old 滚动（5 → 9），提前算节点容量
+⚠️ 顺序反了 = 502（删 Ingress 前流量还在）
 ```
 
 ---
