@@ -667,6 +667,283 @@ kubectl delete deployment myapp-canary -n prod
 
 > **真实灰度（不同版本，小步慢走）→ 趁 canary 满流时更新 old（零风险）→ 同版本一步回迁 → 先删 Ingress 再删 Svc/Deploy**
 
+#### 4.3.7 监控指标与晋级标准（自动化灰度的量化依据）
+
+> 前面四阶段假设"看监控没毛病就推下一步"——**到底看哪些指标？观察多久？阈值多少？**
+> 这一节给出可执行的晋级/回退判定框架。
+
+##### 4.3.7.1 必须监控的 4 类信号
+
+```text
+1. 可用性（错误率）—— 能不能用
+   - HTTP 5xx 比例
+   - 应用层 error / panic / exception 日志条数
+
+2. 性能（延迟）—— 用得顺不顺
+   - P50 / P95 / P99 响应时间
+   - 慢调用（DB / RPC / 缓存）
+
+3. 饱和度（资源）—— 撑不撑得住
+   - Pod CPU / Memory 占用
+   - 队列积压、连接池等待
+   - 节点级资源余量
+
+4. 流量分布 —— 比例对不对
+   - canary 实际拿到流量是否 ≈ canary-weight 设置
+   - 如果实际比例远低于设置（比如设 30% 实际 5%），Ingress 可能有问题
+```
+
+##### 4.3.7.2 关键原则：相对基线，不是绝对值
+
+```text
+❌ 错误率 ≤ 1% 才推
+   → 老版本本来就 0.3%，新版本 0.8% 看似"达标"，实际涨了 2.6 倍
+
+✅ canary 错误率 ≈ stable 错误率（允许 1.2–1.5 倍以内）
+   → 老版本 0.3%，新版本 0.5% 算可控
+   → 老版本 0.3%，新版本 1.5% 必须回退
+
+所有指标都是：canary vs stable（同一个时间窗、同一种请求类型）
+```
+
+##### 4.3.7.3 晋级标准参考表
+
+> 数字是常见经验值，**实际项目按业务敏感度调整**：
+> 支付类（P0）→ 严苛；内容类（P2）→ 可放宽。
+
+| 灰度阶段 | 观察窗口 | 错误率（canary / stable） | P99 延迟 | 资源 | 不达标处理 |
+| --- | --- | --- | --- | --- | --- |
+| 10% | 30 min | ≤ 1.5× | ≤ 1.3× | ≤ 1.5× | 暂停推进或回退 |
+| 30% | 20 min | ≤ 1.3× | ≤ 1.2× | ≤ 1.3× | 暂停推进 |
+| 50% | 15 min | ≤ 1.2× | ≤ 1.15× | ≤ 1.2× | 暂停推进 |
+| 70% | 15 min | ≤ 1.1× | ≤ 1.1× | ≤ 1.15× | 暂停推进 |
+| 100% | 30 min | ≈ stable | ≈ stable | ≈ stable | 直接回退 |
+
+**采样口径**：
+
+```text
+窗口类型选 rolling window（最近 5 min），不是 single point（最近 1 s）
+  → 避免抖动假阳
+
+分桶：按 HTTP status code（2xx / 4xx / 5xx）+ 路由
+  → 不要把 404 算成"错误"
+  → 不要把所有 namespace 混算
+```
+
+##### 4.3.7.4 强回退触发器（任意一条命中立即回退，不观察）
+
+```yaml
+# 这些是硬规则，不在"灰度多少时间"逻辑内
+- canary Pod 出现 CrashLoopBackOff
+- 5xx 错误率绝对值 > 5%                     # 哪怕相对值低
+- 核心链路（如下单）P99 翻倍
+- 业务自定义 critical 告警触发
+- 数据库连接池 / 下游 RPC 错误率突增
+```
+
+##### 4.3.7.5 落到代码：Prometheus 查询示例
+
+```promql
+# canary 5xx 率（最近 5 分钟）
+sum(rate(http_requests_total{track="canary",status=~"5xx"}[5m]))
+/
+sum(rate(http_requests_total{track="canary"}[5m]))
+
+# canary vs stable 错误率比值
+  sum(rate(http_requests_total{track="canary",status=~"5xx"}[5m]))
+/ sum(rate(http_requests_total{track="canary"}[5m]))
+/
+(
+  sum(rate(http_requests_total{track="stable",status=~"5xx"}[5m]))
+/ sum(rate(http_requests_total{track="stable"}[5m]))
+)
+
+# canary P99 延迟
+histogram_quantile(0.99,
+  sum(rate(http_request_duration_seconds_bucket{track="canary"}[5m])) by (le)
+)
+```
+
+##### 4.3.7.6 SLO 视角的灰度决策
+
+```text
+更高级的思路：先定义服务的 SLO（如"99.9% 请求 < 200ms 且错误率 < 0.1%"）
+
+灰度决策：
+  - canary 是否消耗了太多 Error Budget（错误预算）
+  - 当前阶段过去 N 分钟的 burn rate 是否超过阈值
+  - 是否会侵蚀月度 SLO
+
+落地工具：
+  - Prometheus + sloth（生成 SLO PromQL）
+  - Flagger（自动消费 SLO 决策，下节讲）
+```
+
+##### 4.3.7.7 人工 vs 自动判定
+
+| 维度 | 人工 | 自动 |
+| --- | --- | --- |
+| 决策速度 | 分钟级 | 秒级 |
+| 一致性 | 看心情 / 看人 | 永远按规则 |
+| 复杂度 | 简单场景够用 | 复杂场景必需 |
+| 实施成本 | 写文档 | 写代码 / 接 Operator |
+| 适用 | 1–3 个服务 | 几十上百个服务 |
+
+#### 4.3.8 Flagger 拓展认知（自动化灰度的工业级方案）
+
+> 上面四阶段是**人肉操作 canary-weight 注解 + 眼睛看监控**——能用，但**难复制、难一致**。
+> Flagger 把这套流程做成 Operator，自动跑灰度、自动回退。
+
+##### 4.3.8.1 它是什么
+
+```text
+Flagger（Weaveworks 开源，现在是 FluxCD 一部分）
+  - K8s Operator
+  - 围绕 CRD Canary 自动化渐进式交付
+  - 自带：金丝雀发布、A/B 测试、蓝绿发布
+  - 支持多种 Ingress / Service Mesh：
+      NGINX、Traefik、Istio、Linkerd、Contour、App Mesh、Gloo、Skipper
+  - 配合 Prometheus / Datadog / CloudWatch 自动判定
+```
+
+##### 4.3.8.2 为什么需要它
+
+```text
+人肉 canary 的痛点：
+
+  ❌ 每个服务都要写一套 yaml、接监控
+  ❌ 错误判定靠人盯，容易漏看
+  ❌ 凌晨 3 点发布谁盯监控？
+  ❌ 服务多了没法统一标准（新人接手的失败率极高）
+  ❌ 跟监控 / 告警 / SLO 各系统割裂
+
+Flagger 解决：
+
+  ✅ 声明式：写一个 Canary CR，其他全自动
+  ✅ 自动推权重：30s 一次，自动 10 → 20 → 30 → ... → 100
+  ✅ 自动判定：拉 Prometheus 指标，对比 stable vs canary
+  ✅ 自动回退：指标不达标立刻把权重归零
+  ✅ 自动通知：Slack / Teams / MS Teams / Webhook
+```
+
+##### 4.3.8.3 工作原理
+
+```text
+         ┌──────────────┐
+         │ Canary CR    │  ← 你写的：服务名、目标权重、阈值
+         └──────┬───────┘
+                │ watch
+                ▼
+      ┌──────────────────┐
+      │  Flagger Controller │  ← Operator，每 30s 调一次
+      └──────┬───────────┘
+             │
+   ┌─────────┴──────────┐
+   │ ① 拉指标          │──→ Prometheus（metric provider）
+   │ ② 跟 baseline 比   │    / Datadog / CloudWatch
+   │ ③ 达标就推权重     │
+   │ ④ 不达标就回退     │
+   │ ⑤ 推完发通知       │──→ Slack / Webhook
+   └─────────┬──────────┘
+             │
+             ▼
+      调 Ingress / Service Mesh 的权重
+      （改 nginx.ingress.kubernetes.io/canary-weight
+        或 Istio VirtualService weight）
+```
+
+##### 4.3.8.4 Canary CR 示例
+
+```yaml
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: myapp
+  namespace: prod
+spec:
+  provider: nginx                    # 用 nginx ingress
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: myapp
+  service:
+    port: 80
+    # 自动生成 primary + canary Service，并指给同一个 Ingress
+  analysis:
+    interval: 30s                    # 每 30s 评估一次
+    threshold: 10                    # 最多失败 10 次再回退
+    maxWeight: 50                    # 最高权重（不能直接到 100）
+    stepWeight: 10                   # 每次 +10
+    metrics:
+      - name: request-success-rate
+        thresholdRange:
+          min: 99                    # canary 成功率 ≥ 99%
+        interval: 1m
+      - name: request-duration
+        thresholdRange:
+          max: 500                   # P99 ≤ 500ms
+        interval: 1m
+    webhooks:
+      - name: load-test               # 推权重前先发流量压一下
+        type: rollout
+        url: http://flagger-loadtester.test/
+      - name: notify-slack
+        type: post-rollout
+        url: https://hooks.slack.com/services/...
+```
+
+##### 4.3.8.5 三种发布策略（Flagger 都支持）
+
+```text
+1. Canary（金丝雀）
+   权重 0 → 100，渐进式，可自动回退
+
+2. A/B Testing（按 Header / Cookie 切流）
+   nginx.ingress.kubernetes.io/canary-by-header
+   按用户分桶（比如 1% 用户走新版本看转化率）
+
+3. Blue/Green（蓝绿）
+   新版本起来 100% 跑着，但不接流量
+   切流量是一步切换，验证 OK 后下掉老版本
+   适合：DB schema 变更、大版本升级
+```
+
+##### 4.3.8.6 Flagger vs 手撸 ingress-nginx canary
+
+| 维度 | 手撸（前面四阶段） | Flagger |
+| --- | --- | --- |
+| 权重推进 | 人手 `kubectl annotate` | 自动 stepWeight 推进 |
+| 指标判定 | 人盯监控 / 告警 | Prometheus 自动拉取对比 |
+| 自动回退 | 没有，要写脚本 | 内置 |
+| 通知 | 另接（CI/CD 里写） | 内置 webhook |
+| A/B 测试 | 要写两份 Ingress | 改 metric selector 即可 |
+| 蓝绿 | 要自己管两套资源 | 切 `analysis.iterations` |
+| 学习曲线 | 5 分钟 | 半天 |
+| 适用 | 1–5 个服务 / 低频发布 | 几十服务 / 高频发布 / 多人协作 |
+
+##### 4.3.8.7 与 Argo Rollouts 的对比
+
+```text
+同场景同能力的另一个选择：Argo Rollouts（Intuit 出品）
+
+Argo Rollouts：
+  - 也是 Operator + CRD Rollout
+  - 更深度集成 Argo CD（GitOps）
+  - 支持更复杂的策略（traffic routing、experiment、analysis）
+  - UI 更好看（kubectl plugin 有 dashboard）
+
+选哪个：
+  - 已有 Argo CD → Rollouts 几乎无成本集成
+  - 已有 Prometheus + 多 Ingress 控制器 → Flagger 更灵活
+  - 团队小 / 服务少 → Flagger 上手快
+  - 团队大 / 已经在 Argo 体系 → Rollouts 更顺
+```
+
+##### 4.3.8.8 一句话总结 Flagger
+
+> **Flagger = "把前面四阶段 + 监控判定 + 自动回退 + 通知"做成一个 Operator**，
+> 写一个 Canary CR 就完事。
+
 ---
 
 ### 4.4 基于 Header 的灰度
