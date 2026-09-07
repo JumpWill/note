@@ -5,6 +5,312 @@
 
 ---
 
+## 目录
+
+- [零、前置条件：驱动安装 + 容器运行时 GPU 支持](#零前置条件驱动安装--容器运行时-gpu-支持)
+- [一、背景：K8s 为什么需要 GPU 支持](#一背景k8s-为什么需要-gpu-支持)
+- [二、硬件 / 软件基础](#二硬件--软件基础)
+- [三、设备插件（Device Plugin）机制](#三设备插件device-plugin机制)
+- [四、GPU 资源模型（5 种共享方式）](#四gpu-资源模型5-种共享方式)
+- [五、Pod 使用 GPU 实战](#五pod-使用-gpu-实战)
+- [六、GPU 调度](#六gpu-调度)
+- [七、GPU 监控](#七gpu-监控)
+- [八、GPU 运维常见操作](#八gpu-运维常见操作)
+- [九、GPU 优化](#九gpu-优化)
+- [十、常见问题](#十常见问题)
+- [十一、生产部署清单](#十一生产部署清单)
+- [十二、工具速查](#十二工具速查)
+- [十三、一句话总结](#十三一句话总结)
+- [十四、参考](#十四参考)
+
+---
+
+## 零、前置条件：驱动安装 + 容器运行时 GPU 支持
+
+> **顺序很关键**：装驱动 → 配容器运行时支持 GPU → 装 K8s Device Plugin → Pod 申请 GPU。
+> 前两步经常被忽略，结果 Pod 起来后找不到 GPU 设备。
+
+### 0.1 完整依赖链
+
+```text
+GPU 硬件（PCIe 卡）
+  ↓
+NVIDIA 内核驱动（宿主机）         ← 第 1 步
+  ↓
+NVIDIA 用户态库 / CUDA Toolkit  ← 可选（一般装到镜像里）
+  ↓
+nvidia-container-toolkit          ← 第 2 步（关键）
+  ↓
+容器运行时（containerd / docker） ← 配 runtime class
+  ↓
+K8s Device Plugin                 ← 第 3 步
+  ↓
+Pod 申请 nvidia.com/gpu            ← 业务侧
+```
+
+### 0.2 第 1 步：安装 NVIDIA 驱动
+
+#### 方式 1：包管理器安装（推荐，Ubuntu）
+
+```bash
+# 1. 禁用 nouveau 驱动（开源反编译驱动，跟 NVIDIA 驱动冲突）
+sudo tee /etc/modprobe.d/blacklist-nouveau.conf <<EOF
+blacklist nouveau
+options nouveau modeset=0
+EOF
+sudo update-initramfs -u
+sudo reboot
+
+# 2. 添加 NVIDIA 仓库
+# Ubuntu 22.04 + CUDA 12.x（驱动 535+）
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+# 3. 装驱动（顺便把 toolkit 也装了，下面会用）
+sudo apt-get update
+sudo apt-get install -y nvidia-driver-535 nvidia-container-toolkit
+sudo reboot
+```
+
+#### 方式 2：包管理器安装（CentOS / RHEL）
+
+```bash
+# 1. 添加 ELRepo 仓库（含 NVIDIA 驱动）
+sudo yum install -y epel-release
+sudo yum install -y elrepo-release
+sudo yum install -y kmod-nvidia
+
+# 2. 装驱动
+sudo yum install -y nvidia-driver nvidia-settings
+sudo reboot
+```
+
+#### 方式 3：NVIDIA 官方 run 文件（不推荐但最灵活）
+
+```bash
+# 1. 下载
+wget https://us.download.nvidia.com/tesla/535.54.03/NVIDIA-Linux-x86_64-535.54.03.run
+
+# 2. 装（会编译内核模块）
+sudo sh NVIDIA-Linux-x86_64-535.54.03.run \
+  --dkms \                # 用 DKMS，升级内核自动重编
+  --no-opengl-files \     # 不要 OpenGL（容器环境不需要）
+  --no-x-check            # 不要 X server 检查
+
+sudo reboot
+```
+
+#### 验证驱动装好
+
+```bash
+nvidia-smi
+```
+
+```text
+预期输出（看到卡就对了）：
++─────────────────────────────────────────────────────────────+
+| NVIDIA-SMI 535.54.03    Driver Version: 535.54.03           |
+|                  CUDA Version: 12.2                          |
+|─────────────────────────────────────────────────────────────|
+| GPU  Name        Persistence-M  Bus-Id        Memory-Usage  |
+|   0  NVIDIA A100-SXM4-80GB  On             00000000:01:00.0 |
+|                                                              |
+| Processes:                                                    |
+|  GPU   GI   CI        PID   Type   Process name   GPU Memory |
+|        ID   ID                                              |
++─────────────────────────────────────────────────────────────+
+```
+
+#### 驱动版本选型参考
+
+```text
+GPU 卡型         推荐驱动        支持的最高 CUDA
+─────────────────────────────────────────
+A100 80G         525 / 535       CUDA 12.0 / 12.2
+H100 80G         535+            CUDA 12.2+
+H100 SXM5        535+            CUDA 12.2+
+L40              535+            CUDA 12.2+
+A10              525 / 535       CUDA 12.0 / 12.2
+T4               470 / 525       CUDA 11.4 / 12.0
+RTX 4090         535+            CUDA 12.2
+V100             470 / 510       CUDA 11.4 / 11.6
+
+应用侧选 CUDA 版本：应用需求 ≤ 驱动能支持的最高版本
+  应用要 CUDA 11.8 → 装 525+ 驱动（最高支持 12.0）
+  应用要 CUDA 12.2 → 必须 535+ 驱动
+```
+
+---
+
+### 0.3 第 2 步：容器运行时支持 GPU（最常踩的坑）
+
+> 默认的 docker / containerd 不会把 GPU 设备挂进容器，需要额外装 **nvidia-container-toolkit** 并配置运行时。
+
+#### 0.3.1 containerd 配置（K8s 1.24+ 默认）
+
+```bash
+# 1. 装 nvidia-container-toolkit（上面装驱动时已经装过了）
+sudo apt-get install -y nvidia-container-toolkit   # Ubuntu
+sudo yum install -y nvidia-container-toolkit      # CentOS
+
+# 2. 一键配置 containerd（toolkit 自带命令）
+sudo nvidia-ctk runtime configure --runtime=containerd
+
+# 这一步会自动改 /etc/containerd/config.toml：
+#   - 在 runc runtime 后面加 nvidia runtime
+#   - 设置 default_runtime_name = "nvidia"
+
+# 3. 重启 containerd
+sudo systemctl restart containerd
+```
+
+**手动配置参考**（自动配置出问题或想自定义时）：
+
+```toml
+# /etc/containerd/config.toml
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri"]
+  sandbox_image = "registry.k8s.io/pause:3.9"
+
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  default_runtime_name = "nvidia"
+
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+      runtime_type = "io.containerd.runc.v2"
+    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+      runtime_type = "io.containerd.runc.v2"
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+        BinaryName = "/usr/bin/nvidia-container-runtime"
+```
+
+#### 0.3.2 docker 配置（旧版 K8s 或 docker build 用）
+
+```bash
+# 1. 装 toolkit（已装过）
+sudo apt-get install -y nvidia-container-toolkit
+
+# 2. 配置 docker
+sudo nvidia-ctk runtime configure --runtime=docker
+
+# 自动改 /etc/docker/daemon.json：
+# {
+#   "default-runtime": "nvidia",
+#   "runtimes": {
+#     "nvidia": {
+#       "path": "/usr/bin/nvidia-container-runtime"
+#     }
+#   }
+# }
+
+# 3. 重启 docker
+sudo systemctl restart docker
+```
+
+#### 0.3.3 验证容器运行时支持 GPU
+
+```bash
+# 验证 1：docker
+docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
+# 应该看到 GPU 信息（在容器里也能跑 nvidia-smi）
+
+# 验证 2：containerd（用 ctr 测）
+sudo ctr run --rm --runtime=nvidia \
+  docker.io/nvidia/cuda:12.2.0-base-ubuntu22.04 cuda-test \
+  nvidia-smi
+
+# 验证 3：用 nerdctl（containerd 客户端，更友好）
+sudo nerdctl run --rm --gpus all \
+  nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
+```
+
+#### 0.3.4 运行时检查清单
+
+```text
+✅ 节点 nvidia-smi 正常（驱动装好）
+✅ /usr/bin/nvidia-container-runtime 存在
+✅ /etc/containerd/config.toml 配了 nvidia runtime
+✅ docker run --gpus all 能跑 nvidia-smi
+✅ 容器内能看到 /dev/nvidia0, /dev/nvidiactl, /dev/nvidia-uvm 设备
+
+排查命令：
+  ls -la /dev/nvidia*                    # 设备文件存在？
+  which nvidia-container-runtime         # 二进制在吗？
+  nvidia-container-cli list              # 列出可用 GPU
+  cat /etc/containerd/config.toml | grep -A 5 nvidia
+```
+
+---
+
+### 0.4 第 3 步：用 GPU Operator 一键全装（生产推荐）
+
+> 上面的 1+2 步手动装很繁琐，生产环境推荐用 **GPU Operator** 自动管理：
+> 驱动 / toolkit / 设备插件 / 监控 / 节点标签全自动部署 + 升级。
+
+```bash
+# 1. 装 Operator（前提：节点已装好驱动或 Operator 自己装）
+helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+helm repo update
+
+# 2. 让 Operator 自动管理驱动（无需手动装）
+helm install gpu-operator nvidia/gpu-operator \
+  -n gpu-operator --create-namespace \
+  --set driver.enabled=true
+
+# 3. 或者节点已装驱动（disable driver 由 Operator 装）
+helm install gpu-operator nvidia/gpu-operator \
+  -n gpu-operator --create-namespace \
+  --set driver.enabled=false            # 节点已装好驱动
+```
+
+**GPU Operator 会自动装**：
+
+```text
+✅ nvidia-driver        （如果 enabled）
+✅ nvidia-container-toolkit
+✅ nvidia-device-plugin
+✅ dcgm-exporter        （监控）
+✅ dcgm                 （GPU 管理工具）
+✅ node-feature-discovery
+✅ gpu-feature-discovery
+✅ mig-manager          （A100/H100 MIG）
+✅ gds                  （GPU Direct Storage）
+```
+
+---
+
+### 0.5 节点准备 checklist
+
+```text
+装 K8s + GPU 完整顺序：
+
+[ ] 1. 物理机装 GPU 卡（A100 / H100 ...），插好 PCIe
+[ ] 2. BIOS 开启：
+        - SR-IOV
+        - Above 4G Decoding
+        - IOMMU
+        - ReBAR（如果支持）
+[ ] 3. 装 OS（Ubuntu 22.04 / RHEL 9 推荐）
+[ ] 4. 装 NVIDIA 驱动（apt / yum / run）
+[ ] 5. 验证 nvidia-smi 能看到卡
+[ ] 6. 装 K8s（kubeadm / Kubespray / Rancher）
+[ ] 7. 装容器运行时（containerd / docker）
+[ ] 8. 装 nvidia-container-toolkit
+[ ] 9. 配置运行时支持 nvidia（nvidia-ctk runtime configure）
+[ ] 10. 重启运行时
+[ ] 11. 验证 docker run --gpus all nvidia-smi
+[ ] 12. 装 K8s Device Plugin（或用 GPU Operator）
+[ ] 13. 验证 kubectl describe node 看到 nvidia.com/gpu
+[ ] 14. 测试 Pod（nvidia/cuda 镜像 + nvidia-smi）
+```
+
+---
+
 ## 一、背景：K8s 为什么需要 GPU 支持
 
 ```text
