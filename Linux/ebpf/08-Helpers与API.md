@@ -73,7 +73,8 @@ u64 bpf_ktime_get_ns(void);                      // 单调时间，ns
 u64 bpf_ktime_get_boot_ns(void);                 // 自 boot 时间
 u64 bpf_ktime_get_coarse_ns(void);               // 较快
 u64 bpf_jiffies64(void);                          // jiffies
-u64 bpf_get_ns_current_pid_tgid(u64 pid_tgid);    // 单调时间 + PID namespace
+long bpf_get_ns_current_pid_tgid(u64 dev, u64 ino,
+                                 u64 *ns_pid_tgid, u32 ns_id);  // 给定 ns 返回 pid_tgid
 ```
 
 ### 用法：测量耗时
@@ -105,14 +106,12 @@ int exit(struct pt_regs *ctx) {
 u64 bpf_get_current_pid_tgid(void);    // 64位：低32=pid, 高32=tgid
 u64 bpf_get_current_uid_gid(void);     // 64位：低32=uid, 高32=gid
 u32 bpf_get_current_pid(void);          // 仅 4.18+，建议用 pid_tgid
-u64 bpf_get_current_cgroup_id(void);
-u32 bpf_get_current_cgroup_id_32(void);  // 32 位版本
+u64 bpf_get_current_cgroup_id(void);   // 高 32 位版本
 struct task_struct *bpf_get_current_task(void);
 long bpf_get_current_comm(void *buf, u32 size);   // 进程名
-long bpf_task_pt_regs(struct task_struct *tsk);
-u32 bpf_get_current_pid_tgid_64(void);   // 64位（仅当内核 64位）
 
-long bpf_send_signal(u32 sig);   // 向当前进程发信号
+long bpf_send_signal(u32 sig);                    // 向当前进程发信号
+long bpf_send_signal_thread(u32 sig);              // 5.5+，发整个线程组
 ```
 
 ### 用法：基于 UID 限流
@@ -156,9 +155,7 @@ long bpf_skb_load_bytes_relative(const void *skb, u32 offset, void *to, u32 len,
 ```c
 long bpf_redirect(u32 ifindex, u64 flags);
 long bpf_redirect_map(struct bpf_map *map, u32 key, u64 flags);
-long bpf_redirect_peek(u64 flags, u64 *ifindex, u64 *flags);
 long bpf_redirect_neigh(u32 ifindex, struct bpf_redir_neigh *params, int plen, u64 flags);
-long bpf_redirect_xdp(u32 ifindex, u64 flags);   // XDP 内 redirect
 ```
 
 ### 包头改写
@@ -272,7 +269,7 @@ long bpf_probe_read_user_str(void *dst, u32 size, const void *src);
 long bpf_copy_from_user(void *dst, u32 size, const void *src);
 long bpf_copy_to_user(void *dst, u32 size, const void *src);
 
-long bpf_probe_write_user(void *dst, const void *src, u32 len);  // 写用户态（受限）
+long bpf_probe_write_user(void *dst, int len, const void *src);  // 写用户态（受限）
 
 long bpf_get_func_arg(struct pt_regs *ctx, u32 n, u64 *value);     // 函数参数
 long bpf_get_func_ret(struct pt_regs *ctx, u64 *ret);
@@ -318,9 +315,8 @@ int stage1(struct __sk_buff *skb) {
 ## 8. 信号 / 调度
 
 ```c
-long bpf_send_signal(u32 sig);                // 自杀
-long bpf_send_signal_thread(u32 sig);          // 给整个线程组
-long bpf_signal(u32 sig, void *info);          // 带信息
+long bpf_send_signal(u32 sig);                // 向当前进程发信号
+long bpf_send_signal_thread(u32 sig);          // 5.5+，发整个线程组
 u32 bpf_get_smp_processor_id(void);           // 当前 CPU
 u32 bpf_get_numa_node_id(void);
 ```

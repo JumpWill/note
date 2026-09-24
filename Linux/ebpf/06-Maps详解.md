@@ -62,12 +62,13 @@ if (p) {
 bpf_map_delete_elem(&my_hash, &key);
 
 // 遍历（注意：删除要谨慎，可能被 verifier 拒）
-u32 k, nk;
-for (k = 0;;) {
-    if (bpf_map_get_next_key(&my_hash, &k, &nk))
+// 首轮 key 必须传 NULL，之后传上一个 key
+u32 *k = NULL, nk;
+while (1) {
+    if (bpf_map_get_next_key(&my_hash, k, &nk))
         break;
-    // 用 nk
-    k = nk;
+    // 用 nk 做查询/统计
+    k = &nk;
 }
 ```
 
@@ -97,20 +98,21 @@ struct {
 - **不适合复杂值**（结构体）
 
 ```c
-// 写：直接 update，helper 帮你选本 CPU 的位置
-u32 key = bpf_get_smp_processor_id();
+// 写：直接 update，helper 帮你选本 CPU 的位置（不需要按 CPU 取 key）
+u32 key = 1;  // key 是业务 key（PID、fd 等）
 u64 *cnt = bpf_map_lookup_elem(&pcpu_count, &key);
 if (cnt) (*cnt)++;
 ```
 
-用户态聚合：
+用户态聚合（一次拿所有 CPU 的副本）：
 
 ```c
-int values[256];  // CPU 数量
-int ncpus = libbpf_num_possible_cpus();
-bpf_map_lookup_percpu_elem(fd, &key, values, ncpus, 0);
-long total = 0;
-for (int i = 0; i < ncpus; i++) total += values[i];
+// cpu_size 是单个 per-CPU value 的字节数
+unsigned int ncpus = libbpf_num_possible_cpus();
+u64 values[ncpus];  // 必须 >= ncpus × sizeof(u64)
+bpf_map_lookup_percpu_elem(fd, &key, values, sizeof(u64), 0);
+u64 total = 0;
+for (unsigned int i = 0; i < ncpus; i++) total += values[i];
 ```
 
 ## 3. ARRAY（配置 map）
@@ -233,19 +235,9 @@ struct ring_buffer *rb = ring_buffer__new(map_fd, on_event, NULL, NULL);
 ring_buffer__poll(rb, 100);  // 阻塞 100ms
 ```
 
-### 输出事件：丢弃事件（libbpf 默认 1 个 / 秒）
+> ⚠️ `max_entries_ro` 不是 BTF map 字段。这里只是举例：ringbuf 的丢事件统计在用户态通过 `ring_buffer__epoll_wait` 的 `cnt` 返回值检查，或用 `BPF_RB_NO_WAKEUP` 控制。
 
-```c
-struct {
-    __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024);
-    __uint(max_entries_ro, 1);  // 丢失事件：保留最后丢失统计
-} events SEC(".maps");
-
-// 详情看 BPF_MAP_TYPE_RINGBUF 文档
-```
-
-## 8. ARRAY_OF_MAPS（路由表）
+## 7. ARRAY_OF_MAPS（路由表）
 
 ```c
 struct {
@@ -272,7 +264,7 @@ if (inner) {
 
 **典型应用**：Cilium 的 endpoint map，每个 pod 一个 inner 配置。
 
-## 9. BPF_MAP_TYPE_TASK_STORAGE（任务私有存储）
+## 8. BPF_MAP_TYPE_TASK_STORAGE（任务私有存储）
 
 ```c
 struct my_task_data {
@@ -303,7 +295,7 @@ int on_openat(struct trace_event_raw_sys_enter *ctx) {
 }
 ```
 
-## 10. 共享 Map：多程序协作
+## 9. 共享 Map：多程序协作
 
 ```c
 // 在 a.bpf.c
@@ -332,13 +324,13 @@ extern struct {
 bpftool map pin id 10 /sys/fs/bpf/shared_stats
 ```
 
-## 11. 性能考量
+## 10. 性能考量
 
 | Map 类型 | 写 | 读 | 遍历 | 备注 |
 |---------|---|-----|------|------|
 | HASH | O(1) 加锁 | O(1) 加锁 | O(n) | 默认起点 |
 | PERCPU_HASH | O(1) 免锁 | O(1) 免锁 | O(n×ncpu) | 高写吞吐 |
-| ARTL_PCPU | 免锁 | 免锁 | O(n×ncpu) | 最简配置 |
+| ARRAY_PCPU | 免锁 | 免锁 | O(n×ncpu) | 最简配置 |
 | LRU_HASH | O(1) 加锁 | O(1) | O(n) | 内存可控 |
 | LPM_TRIE | O(prefix) | O(prefix) | O(n) | 路由 |
 | RINGBUF | 零拷贝 | 零拷贝 | 不支持 | 事件首选 |
@@ -351,7 +343,7 @@ bpftool map pin id 10 /sys/fs/bpf/shared_stats
 - **路由** → LPM_TRIE
 - **超大有界** → LRU_HASH（防止内存爆炸）
 
-## 12. 常见错误
+## 11. 常见错误
 
 ### `bpf_map_lookup_elem` 返回 NULL
 
@@ -376,7 +368,7 @@ bpftool map pin id 10 /sys/fs/bpf/shared_stats
 sysctl -w kernel.bpf_stats_enabled=1
 ```
 
-## 13. 用户态 Map 操作完整参考
+## 12. 用户态 Map 操作完整参考
 
 ```c
 #include <bpf/bpf.h>
@@ -407,7 +399,7 @@ int bpf_obj_pin(int fd, const char *pathname);
 int bpf_obj_get(const char *pathname);
 ```
 
-## 14. 一个生产级例子：限速
+## 13. 一个生产级例子：限速
 
 ```c
 struct {

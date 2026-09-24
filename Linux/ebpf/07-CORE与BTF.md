@@ -215,18 +215,22 @@ libbpf 加载时读 BTF，发现 6.1 内核的 `__state` 偏移是 12，于是�
 
 SEC("tracepoint/sched/sched_switch")
 int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
-    struct task_struct *prev = (struct task_struct *)ctx->prev_pid;
-    struct task_struct *next = (struct task_struct *)ctx->next_pid;
+    // ctx->prev_pid / next_pid 是 pid_t（u32），不是指针
+    pid_t prev_pid = ctx->prev_pid;
+    pid_t next_pid = ctx->next_pid;
 
-    // 用 BPF_CORE_READ 自动重定位
-    u32 prev_pid = BPF_CORE_READ(prev, pid);
-    u32 next_pid = BPF_CORE_READ(next, pid);
+    // 通过 BTF + kfunc 拿 task_struct（推荐）
+    struct task_struct *prev = bpf_task_from_pid(prev_pid);
+    struct task_struct *next = bpf_task_from_pid(next_pid);
 
-    u32 prev_state = BPF_CORE_READ(prev, __state);
-    u32 next_state = BPF_CORE_READ(next, __state);
+    if (prev && next) {
+        u32 prev_state = BPF_CORE_READ(prev, __state);
+        bpf_task_release(prev);
+        bpf_task_release(next);
 
-    bpf_printk("switch %d -> %d, prev_state=%d\n",
-               prev_pid, next_pid, prev_state);
+        bpf_printk("switch %d -> %d, prev_state=%d\n",
+                   ctx->prev_pid, ctx->next_pid, prev_state);
+    }
     return 0;
 }
 ```
