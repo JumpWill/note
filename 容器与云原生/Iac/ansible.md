@@ -179,6 +179,202 @@ AWS 用 `amazon.aws.aws_ec2_inventory`，K8s 用 `community.kubernetes.k8s_inven
 
 ---
 
+## 主机匹配（Host Pattern）
+
+`hosts:` 后面写的表达式决定了「哪些主机执行这个 play」。这是 Ansible 里最需要精确理解的一块，Ansible 内部把所有主机模式求值成一个 **布尔代数表达式**，按「精确名 → 通配 → 组 → 特殊组」的顺序解析。
+
+### 三种匹配能力
+
+| 类型 | 语法 | 说明 |
+|---|---|---|
+| 精确主机名 | `web1.example.com` | 全等匹配，最快 |
+| 通配符 | `web*`、`*.example.com`、`db?` | `*` 任意长度，`?` 单个字符 |
+| 分组 | `webservers` | 组名，递归展开（含 children/vars） |
+
+```yaml
+- hosts: web1.example.com     # 精确
+- hosts: "web*"              # web1 web2 web01...
+- hosts: "*.example.com"     # 所有子域
+- hosts: "db?"               # db1 db2（不含 db10）
+- hosts: webservers          # 组
+- hosts: 10.0.0.1,10.0.0.2  # 逗号并列
+- hosts: all                 # 所有已知主机
+- hosts: localhost           # 特殊，需要 ansible_connection=local 才真在本机执行
+```
+
+### 逻辑组合
+
+主机模式支持三个运算符，**从左到右求值，没有括号优先级**：
+
+```text
+,   并集     webservers,dbservers     两组都要
+:   排除     webservers:!web2         只要 web1（去掉 web2）
+&   交集     webservers:&prod         既在 webservers 又在 prod
+```
+
+```yaml
+- hosts: webservers:!web2              # webservers 去掉 web2
+- hosts: webservers:&prod             # webservers 与 prod 的交集
+- hosts: webservers:!db1:&prod        # webservers 去掉 db1，再与 prod 取交集
+- hosts: 'staging:*:!staging:critical' # 三个运算符混用，左到右
+```
+
+**易错点**：`!` 在 YAML 里必须**整体加引号**，否则被当成标签/特殊字符：
+
+```yaml
+- hosts: "webservers:!web2"     # ✅
+- hosts: webservers:!web2       # ❌ YAML 解析异常
+```
+
+`--limit` 用的是同一套语法，但**跨所有 play 生效**，且排除优先级不同（`--limit` 是在已有主机集合上再切一刀）：
+
+```bash
+ansible-playbook site.yml --limit webservers
+ansible-playbook site.yml --limit "webservers:!web1"
+ansible-playbook site.yml --limit web1,web2
+```
+
+### 特殊组
+
+| 组名 | 含义 |
+|---|---|
+| `all` | 所有主机（含 ungrouped） |
+| `ungrouped` | 不属于任何组的主机 |
+| `<某组>:children` | 组的子组（通常不直接用） |
+| `localhost` | 本机，需显式声明 |
+
+```yaml
+- hosts: localhost
+  connection: local          # 关键：真正在本机执行，而不是 SSH 自己
+  gather_facts: false
+  tasks:
+    - name: 本机做初始化（如生成证书、拉取仓库）
+      ansible.builtin.command: /opt/scripts/init.sh
+```
+
+`localhost` 的三种写法：
+
+```yaml
+- hosts: localhost
+  connection: local                 # 推荐，显式
+
+- hosts: localhost
+  ansible_connection: local         # 通过 inventory 声明
+
+- hosts: localhost
+  connection: local
+  vars: { ansible_python_interpreter: "{{ ansible_playbook_python }}" }   # 避免警告
+```
+
+### 匹配是怎么求值的（原理）
+
+Ansible 把 inventory 建成一个 `Pattern` 树，最终执行逻辑可以简化为：
+
+```python
+# 伪代码：主机 h 是否被模式 p 选中
+def matches(pattern, host):
+    if pattern == 'all':
+        return True
+    if ':' in pattern:                      # 拆分排除与交集
+        head, _, rest = pattern.partition(':')
+        if '!' in rest:                     # 排除优先判断
+            if any(matches(r, host) for r in rest.split('!')[1:]):
+                return False
+            return matches(head, host)
+        if '&' in rest:
+            return all(matches(part, host) for part in (head + rest).split('&'))
+    if ',' in pattern:
+        return any(matches(p, host) for p in pattern.split(','))
+    if pattern in inventory.groups:         # 组
+        return host in expand_group(pattern)
+    import fnmatch                          # 通配
+    return fnmatch.fnmatch(host, pattern)
+```
+
+关键结论：**排除 `!` 优先级最高**，一旦命中排除名单就直接返回 False，后面的交集条件再也不会让它回来。所以 `webservers:!web2:&prod` 里，如果 `web2` 本来就不在 prod，它是被 `!` 排除的，不是因为 `&prod`。
+
+### 匹配结果的查看方式
+
+```bash
+# 看某个 play 到底会选中哪些主机（最常用）
+ansible-playbook site.yml --list-hosts
+
+# 输出示例：
+#   hosts (2):
+#     web1.example.com
+#     web2.example.com
+
+ansible-playbook site.yml --list-hosts -e "env=prod"   # 变量会影响动态 inventory 的结果
+ansible-playbook site.yml --list-tasks                 # 全部 task 清单
+ansible-playbook site.yml --list-tags                  # 所有标签
+```
+
+调试匹配问题时的顺序：
+
+```bash
+# 1. 主机在不在 inventory 里
+ansible-inventory --graph                     # 打印组结构树
+ansible-inventory --list                      # 打印解析后的全部主机与变量
+ansible-inventory --host web1                 # 看单台主机解析出的所有变量
+
+# 2. 通配有没有匹上（wildcard 会展开成 host 列表）
+ansible-inventory --graph --vars | grep web
+
+# 3. 变量导致的动态分组
+ansible-inventory --list | jq '.web.hosts'
+```
+
+### 动态分组：用变量决定主机属于哪个组
+
+这是最实用的一招 —— 不改 inventory 结构，在 playbook 里按条件动态决定任务范围：
+
+```yaml
+- name: 根据 OS 决定做什么
+  hosts: all
+  gather_facts: yes
+  tasks:
+    - name: Debian 系装 A
+      ansible.builtin.package: { name: pkg-a, state: present }
+      when: ansible_os_family == "Debian"
+
+    - name: RedHat 系装 B
+      ansible.builtin.package: { name: pkg-b, state: present }
+      when: ansible_os_family == "RedHat"
+
+    - name: 汇总到对应分组
+      ansible.builtin.add_host:
+        name: "{{ inventory_hostname }}"
+        groups: debian_hosts          # 动态加入新组
+      when: ansible_os_family == "Debian"
+
+- name: 只对 Debian 这组做后续操作
+  hosts: debian_hosts
+  tasks:
+    - debug: msg="{{ inventory_hostname }} 是 Debian"
+
+# 改组 / 移除
+    - ansible.builtin.group_by:
+        key: "web_{{ tier }}"          # 按变量值分组，自动生成 web_dev/web_prod
+```
+
+```bash
+# group_by 只改内存分组，不写回 inventory 文件
+ansible-playbook site.yml --limit webservers
+```
+
+### 常见匹配误区
+
+| 现象 | 原因 |
+|---|---|
+| `hosts: "web*"` 匹配不到 | 通配**不会**匹配组名，只匹配主机名；要匹配组得用组名本身 |
+| `web*` 意外命中 `web` 和 `webdb` | `*` 是任意长度，不是词边界；用 `web?` 只匹配单字符 |
+| `webservers:!web2` 报错 | YAML 未加引号 |
+| `localhost` 明明写了却 SSH 到自己 | 忘了 `connection: local` |
+| `--limit` 后 play 里的 `groups[]` 仍是全量 | `--limit` 只切主机集合，不切 `groups`/`hostvars` 变量；用 `ansible_play_hosts_all` 或 `play_hosts` |
+| 动态 inventory 匹配不到 | 动态清单返回的 group 名要和 `hosts:` 写的完全一致（大小写敏感） |
+
+---
+
 ## ansible.cfg 常用配置
 
 ```ini
